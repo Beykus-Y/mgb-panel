@@ -20,25 +20,44 @@ type Node struct {
 }
 
 type User struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Email      string    `json:"email"`
-	Telegram   string    `json:"telegram"`
-	Note       string    `json:"note"`
-	AccessKey  string    `json:"access_key"`
-	CreatedAt  time.Time `json:"created_at"`
-	ModifiedAt time.Time `json:"modified_at"`
+	ID                           string    `json:"id"`
+	Name                         string    `json:"name"`
+	Email                        string    `json:"email"`
+	Telegram                     string    `json:"telegram"`
+	Note                         string    `json:"note"`
+	AccessKey                    string    `json:"access_key"`
+	CurrentSubscriptionID        string    `json:"current_subscription_id,omitempty"`
+	CurrentSubscriptionName      string    `json:"current_subscription_name,omitempty"`
+	CurrentSubscriptionStatus    string    `json:"current_subscription_status,omitempty"`
+	CurrentSubscriptionToken     string    `json:"current_subscription_token,omitempty"`
+	CurrentSubscriptionExpiresAt time.Time `json:"current_subscription_expires_at,omitempty"`
+	CreatedAt                    time.Time `json:"created_at"`
+	ModifiedAt                   time.Time `json:"modified_at"`
 }
 
 type Subscription struct {
-	ID         string    `json:"id"`
-	UserID     string    `json:"user_id"`
-	Name       string    `json:"name"`
-	Status     string    `json:"status"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	Token      string    `json:"token,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	ModifiedAt time.Time `json:"modified_at"`
+	ID           string                    `json:"id"`
+	UserID       string                    `json:"user_id"`
+	Name         string                    `json:"name"`
+	Status       string                    `json:"status"`
+	ExpiresAt    time.Time                 `json:"expires_at"`
+	Token        string                    `json:"token,omitempty"`
+	BindingCount int                       `json:"binding_count"`
+	Bindings     []SubscriptionBindingItem `json:"bindings,omitempty"`
+	CreatedAt    time.Time                 `json:"created_at"`
+	ModifiedAt   time.Time                 `json:"modified_at"`
+}
+
+type SubscriptionBindingItem struct {
+	ID                   string `json:"id"`
+	SubscriptionID       string `json:"subscription_id"`
+	NodeInboundBindingID string `json:"node_inbound_binding_id"`
+	NodeID               string `json:"node_id"`
+	NodeName             string `json:"node_name"`
+	NodeAddress          string `json:"node_address"`
+	InboundProfileID     string `json:"inbound_profile_id"`
+	InboundName          string `json:"inbound_name"`
+	PublicHost           string `json:"public_host"`
 }
 
 type InboundProfile struct {

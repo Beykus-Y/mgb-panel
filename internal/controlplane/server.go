@@ -2,7 +2,10 @@ package controlplane
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -20,6 +23,7 @@ import (
 	"mgb-panel/internal/inboundrules"
 	"mgb-panel/internal/model"
 	"mgb-panel/internal/pki"
+	"mgb-panel/internal/secret"
 	"mgb-panel/internal/subscriptions"
 	"mgb-panel/internal/topology"
 )
@@ -28,15 +32,15 @@ import (
 var templateFS embed.FS
 
 type Server struct {
-	store       *database.Store
-	authority   *pki.Authority
-	baseURL     string
-	listenAddr  string
-	dataDir     string
-	singboxBin  string
-	localPoll   time.Duration
-	templates   *template.Template
-	httpServer  *http.Server
+	store      *database.Store
+	authority  *pki.Authority
+	baseURL    string
+	listenAddr string
+	dataDir    string
+	singboxBin string
+	localPoll  time.Duration
+	templates  *template.Template
+	httpServer *http.Server
 }
 
 type Config struct {
@@ -56,21 +60,24 @@ type adminPageData struct {
 	NodeNames        map[string]string
 	UserNames        map[string]string
 	InboundNames     map[string]string
+	BindingCatalog   []model.SubscriptionBindingItem
 	LocalNode        *model.Node
 }
 
 func New(store *database.Store, authority *pki.Authority, cfg Config) (*Server, error) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"pageTitle":          pageTitle,
-		"pageDescription":    pageDescription,
-		"statusLabel":        statusLabel,
-		"roleLabel":          roleLabel,
-		"protocolLabel":      protocolLabel,
-		"transportLabel":     transportLabel,
-		"tlsModeLabel":       tlsModeLabel,
-		"formatDate":         formatDate,
-		"formatDateTime":     formatDateTime,
-		"nodeInstallCommand": nodeInstallCommand,
+		"pageTitle":              pageTitle,
+		"pageDescription":        pageDescription,
+		"statusLabel":            statusLabel,
+		"roleLabel":              roleLabel,
+		"protocolLabel":          protocolLabel,
+		"transportLabel":         transportLabel,
+		"tlsModeLabel":           tlsModeLabel,
+		"formatDate":             formatDate,
+		"formatDateTime":         formatDateTime,
+		"formatDateTimeInput":    formatDateTimeInput,
+		"hasSubscriptionBinding": hasSubscriptionBinding,
+		"nodeInstallCommand":     nodeInstallCommand,
 	}).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -104,6 +111,10 @@ func New(store *database.Store, authority *pki.Authority, cfg Config) (*Server, 
 	mux.HandleFunc("/install/panel.sh", srv.handleInstallScript("assets/install-panel.sh"))
 	mux.HandleFunc("/admin/nodes", srv.handleCreateNodeForm)
 	mux.HandleFunc("/admin/users", srv.handleCreateUserForm)
+	mux.HandleFunc("/admin/users/update", srv.handleUpdateUserForm)
+	mux.HandleFunc("/admin/users/freeze", srv.handleFreezeUserForm)
+	mux.HandleFunc("/admin/users/activate", srv.handleActivateUserForm)
+	mux.HandleFunc("/admin/users/extend", srv.handleExtendUserForm)
 	mux.HandleFunc("/admin/subscriptions", srv.handleCreateSubscriptionForm)
 	mux.HandleFunc("/admin/inbounds", srv.handleCreateInboundForm)
 	mux.HandleFunc("/admin/bindings", srv.handleCreateBindingForm)
@@ -196,6 +207,46 @@ func (s *Server) renderAdminPage(w http.ResponseWriter, r *http.Request, page st
 	for _, inbound := range dashboard.Inbounds {
 		data.InboundNames[inbound.ID] = inbound.Name
 	}
+	for _, binding := range dashboard.Bindings {
+		var (
+			nodeName    = binding.NodeID
+			nodeAddress string
+			inboundName = binding.InboundProfileID
+			publicHost  string
+		)
+		for _, node := range dashboard.Nodes {
+			if node.ID == binding.NodeID {
+				nodeName = node.Name
+				nodeAddress = node.Address
+				break
+			}
+		}
+		for _, inbound := range dashboard.Inbounds {
+			if inbound.ID == binding.InboundProfileID {
+				inboundName = inbound.Name
+				publicHost = inbound.PublicHost
+				if publicHost == "" {
+					publicHost = inbound.ServerName
+				}
+				break
+			}
+		}
+		if publicHost == "" {
+			publicHost = nodeAddress
+		}
+		if publicHost == "" {
+			publicHost = nodeName
+		}
+		data.BindingCatalog = append(data.BindingCatalog, model.SubscriptionBindingItem{
+			NodeInboundBindingID: binding.ID,
+			NodeID:               binding.NodeID,
+			NodeName:             nodeName,
+			NodeAddress:          nodeAddress,
+			InboundProfileID:     binding.InboundProfileID,
+			InboundName:          inboundName,
+			PublicHost:           publicHost,
+		})
+	}
 	if err := s.templates.ExecuteTemplate(w, "dashboard.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -244,9 +295,10 @@ func (s *Server) handleCreateSubscriptionForm(w http.ResponseWriter, r *http.Req
 	}
 	days, _ := strconv.Atoi(defaultForm(r, "days", "30"))
 	if _, err := s.store.CreateSubscription(r.Context(), database.CreateSubscriptionParams{
-		UserID:    r.FormValue("user_id"),
-		Name:      defaultForm(r, "name", "default"),
-		ExpiresAt: time.Now().UTC().Add(time.Duration(days) * 24 * time.Hour),
+		UserID:     r.FormValue("user_id"),
+		Name:       defaultForm(r, "name", "default"),
+		ExpiresAt:  time.Now().UTC().Add(time.Duration(days) * 24 * time.Hour),
+		BindingIDs: r.Form["binding_id"],
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -272,7 +324,7 @@ func (s *Server) handleCreateInboundForm(w http.ResponseWriter, r *http.Request)
 		Path:                   r.FormValue("path"),
 		Password:               r.FormValue("password"),
 		RealityPubKey:          r.FormValue("reality_public_key"),
-		RealityPrivateKey:     r.FormValue("reality_private_key"),
+		RealityPrivateKey:      r.FormValue("reality_private_key"),
 		RealityHandshakeServer: r.FormValue("reality_handshake_server"),
 		RealityHandshakePort:   realityHandshakePort,
 		RealityShort:           r.FormValue("reality_short_id"),
@@ -291,6 +343,73 @@ func (s *Server) handleCreateInboundForm(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	http.Redirect(w, r, adminRedirect(r, "/inbounds"), http.StatusSeeOther)
+}
+
+func (s *Server) handleUpdateUserForm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	userID := strings.TrimSpace(r.FormValue("user_id"))
+	if _, err := s.store.UpdateUser(r.Context(), userID, database.CreateUserParams{
+		Name:     defaultForm(r, "name", "user"),
+		Email:    defaultForm(r, "email", "user@example.com"),
+		Telegram: strings.TrimSpace(r.FormValue("telegram")),
+		Note:     strings.TrimSpace(r.FormValue("note")),
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	subscriptionName := strings.TrimSpace(r.FormValue("subscription_name"))
+	expiresRaw := strings.TrimSpace(r.FormValue("subscription_expires_at"))
+	if subscriptionName != "" && expiresRaw != "" {
+		expiresAt, err := time.ParseInLocation("2006-01-02T15:04", expiresRaw, time.Local)
+		if err != nil {
+			http.Error(w, "invalid subscription expiry", http.StatusBadRequest)
+			return
+		}
+		if _, err := s.store.UpdateUserSubscription(r.Context(), userID, subscriptionName, expiresAt.UTC()); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	http.Redirect(w, r, adminRedirect(r, "/users"), http.StatusSeeOther)
+}
+
+func (s *Server) handleFreezeUserForm(w http.ResponseWriter, r *http.Request) {
+	s.handleUserSubscriptionStatus(w, r, "inactive", "/users")
+}
+
+func (s *Server) handleActivateUserForm(w http.ResponseWriter, r *http.Request) {
+	s.handleUserSubscriptionStatus(w, r, "active", "/users")
+}
+
+func (s *Server) handleUserSubscriptionStatus(w http.ResponseWriter, r *http.Request, status, fallback string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := s.store.SetUserSubscriptionStatus(r.Context(), strings.TrimSpace(r.FormValue("user_id")), status); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, adminRedirect(r, fallback), http.StatusSeeOther)
+}
+
+func (s *Server) handleExtendUserForm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	days, _ := strconv.Atoi(defaultForm(r, "days", "30"))
+	if _, err := s.store.ExtendUserSubscription(r.Context(), strings.TrimSpace(r.FormValue("user_id")), maxInt(days, 1)); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, adminRedirect(r, "/users"), http.StatusSeeOther)
 }
 
 func (s *Server) handleCreateBindingForm(w http.ResponseWriter, r *http.Request) {
@@ -388,18 +507,20 @@ func (s *Server) handleAdminSubscriptionsAPI(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, subs, err)
 	case http.MethodPost:
 		var req struct {
-			UserID string `json:"user_id"`
-			Name   string `json:"name"`
-			Days   int    `json:"days"`
+			UserID     string   `json:"user_id"`
+			Name       string   `json:"name"`
+			Days       int      `json:"days"`
+			BindingIDs []string `json:"binding_ids"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		sub, err := s.store.CreateSubscription(r.Context(), database.CreateSubscriptionParams{
-			UserID:    req.UserID,
-			Name:      req.Name,
-			ExpiresAt: time.Now().UTC().Add(time.Duration(maxInt(req.Days, 1)) * 24 * time.Hour),
+			UserID:     req.UserID,
+			Name:       req.Name,
+			ExpiresAt:  time.Now().UTC().Add(time.Duration(maxInt(req.Days, 1)) * 24 * time.Hour),
+			BindingIDs: req.BindingIDs,
 		})
 		writeJSON(w, sub, err)
 	default:
@@ -730,6 +851,9 @@ func defaultForm(r *http.Request, key, fallback string) string {
 }
 
 func normalizeInboundCreateParams(params database.CreateInboundProfileParams) (database.CreateInboundProfileParams, error) {
+	if err := applyInboundAutogen(&params); err != nil {
+		return params, err
+	}
 	profile, err := inboundrules.Normalize(model.InboundProfile{
 		Name:                   params.Name,
 		Protocol:               params.Protocol,
@@ -773,6 +897,48 @@ func normalizeInboundCreateParams(params database.CreateInboundProfileParams) (d
 	params.TLSKeyPath = profile.TLSKeyPath
 	params.ShadowsocksMethod = profile.ShadowsocksMethod
 	return params, nil
+}
+
+func applyInboundAutogen(params *database.CreateInboundProfileParams) error {
+	switch strings.ToLower(strings.TrimSpace(params.Protocol)) {
+	case "trojan", "hysteria2", "shadowsocks":
+		if strings.TrimSpace(params.Password) == "" {
+			password, err := secret.Hex(12)
+			if err != nil {
+				return err
+			}
+			params.Password = password
+		}
+	}
+
+	if strings.ToLower(strings.TrimSpace(params.TLSMode)) != "reality" {
+		return nil
+	}
+	if strings.TrimSpace(params.RealityShort) == "" {
+		shortID, err := secret.Hex(4)
+		if err != nil {
+			return err
+		}
+		params.RealityShort = shortID
+	}
+	if strings.TrimSpace(params.RealityHandshakeServer) == "" {
+		params.RealityHandshakeServer = "www.cloudflare.com"
+	}
+	if params.RealityHandshakePort == 0 {
+		params.RealityHandshakePort = 443
+	}
+	if strings.TrimSpace(params.RealityPrivateKey) != "" && strings.TrimSpace(params.RealityPubKey) != "" {
+		return nil
+	}
+
+	curve := ecdh.X25519()
+	privateKey, err := curve.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate reality keypair: %w", err)
+	}
+	params.RealityPrivateKey = base64.RawURLEncoding.EncodeToString(privateKey.Bytes())
+	params.RealityPubKey = base64.RawURLEncoding.EncodeToString(privateKey.PublicKey().Bytes())
+	return nil
 }
 
 func (s *Server) handleInstallScript(assetPath string) http.HandlerFunc {
@@ -994,6 +1160,22 @@ func formatDateTime(t time.Time) string {
 		return "никогда"
 	}
 	return t.UTC().Format("02.01.2006 15:04 UTC")
+}
+
+func formatDateTimeInput(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.In(time.Local).Format("2006-01-02T15:04")
+}
+
+func hasSubscriptionBinding(sub model.Subscription, bindingID string) bool {
+	for _, item := range sub.Bindings {
+		if item.NodeInboundBindingID == bindingID {
+			return true
+		}
+	}
+	return false
 }
 
 func nodeInstallCommand(baseURL, enrollToken, fingerprint string) string {

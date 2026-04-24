@@ -39,9 +39,10 @@ type CreateUserParams struct {
 }
 
 type CreateSubscriptionParams struct {
-	UserID    string
-	Name      string
-	ExpiresAt time.Time
+	UserID     string
+	Name       string
+	ExpiresAt  time.Time
+	BindingIDs []string
 }
 
 type CreateInboundProfileParams struct {
@@ -55,7 +56,7 @@ type CreateInboundProfileParams struct {
 	Path                   string
 	Password               string
 	RealityPubKey          string
-	RealityPrivateKey     string
+	RealityPrivateKey      string
 	RealityHandshakeServer string
 	RealityHandshakePort   int
 	RealityShort           string
@@ -142,6 +143,13 @@ func (s *Store) migrate(ctx context.Context) error {
 			subscription_id TEXT NOT NULL,
 			token TEXT NOT NULL UNIQUE,
 			created_at TIMESTAMP NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS subscription_binding_items (
+			id TEXT PRIMARY KEY,
+			subscription_id TEXT NOT NULL,
+			node_inbound_binding_id TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			UNIQUE(subscription_id, node_inbound_binding_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS nodes (
 			id TEXT PRIMARY KEY,
@@ -716,7 +724,34 @@ func (s *Store) CreateUser(ctx context.Context, params CreateUserParams) (model.
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]model.User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, email, telegram, note, access_key, created_at, modified_at FROM users ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			u.id,
+			u.name,
+			u.email,
+			u.telegram,
+			u.note,
+			u.access_key,
+			COALESCE(s.id, ''),
+			COALESCE(s.name, ''),
+			COALESCE(s.status, ''),
+			s.expires_at,
+			COALESCE(t.token, ''),
+			u.created_at,
+			u.modified_at
+		FROM users u
+		LEFT JOIN subscriptions s ON s.id = (
+			SELECT s2.id
+			FROM subscriptions s2
+			WHERE s2.user_id = u.id
+			ORDER BY
+				CASE WHEN s2.status = 'active' THEN 0 ELSE 1 END,
+				s2.expires_at DESC,
+				s2.created_at DESC
+			LIMIT 1
+		)
+		LEFT JOIN subscription_tokens t ON t.subscription_id = s.id
+		ORDER BY u.created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -725,15 +760,211 @@ func (s *Store) ListUsers(ctx context.Context) ([]model.User, error) {
 	var out []model.User
 	for rows.Next() {
 		var user model.User
-		if err := rows.Scan(&user.ID, &user.Name, &user.Email, &user.Telegram, &user.Note, &user.AccessKey, &user.CreatedAt, &user.ModifiedAt); err != nil {
+		var expiresAt sql.NullTime
+		if err := rows.Scan(
+			&user.ID,
+			&user.Name,
+			&user.Email,
+			&user.Telegram,
+			&user.Note,
+			&user.AccessKey,
+			&user.CurrentSubscriptionID,
+			&user.CurrentSubscriptionName,
+			&user.CurrentSubscriptionStatus,
+			&expiresAt,
+			&user.CurrentSubscriptionToken,
+			&user.CreatedAt,
+			&user.ModifiedAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
+		}
+		if expiresAt.Valid {
+			user.CurrentSubscriptionExpiresAt = expiresAt.Time
 		}
 		out = append(out, user)
 	}
 	return out, rows.Err()
 }
 
+func (s *Store) UpdateUser(ctx context.Context, userID string, params CreateUserParams) (model.User, error) {
+	now := time.Now().UTC()
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE users SET name = ?, email = ?, telegram = ?, note = ?, modified_at = ? WHERE id = ?`,
+		params.Name,
+		params.Email,
+		params.Telegram,
+		params.Note,
+		now,
+		userID,
+	)
+	if err != nil {
+		return model.User{}, fmt.Errorf("update user: %w", err)
+	}
+	if affected, err := res.RowsAffected(); err == nil && affected == 0 {
+		return model.User{}, ErrNotFound
+	}
+	_ = s.Audit(ctx, "admin", "update", "user", userID, params.Email)
+
+	users, err := s.ListUsers(ctx)
+	if err != nil {
+		return model.User{}, err
+	}
+	for _, user := range users {
+		if user.ID == userID {
+			return user, nil
+		}
+	}
+	return model.User{}, ErrNotFound
+}
+
+func (s *Store) currentSubscriptionByUser(ctx context.Context, userID string) (model.Subscription, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT s.id, s.user_id, s.name, s.status, s.expires_at, COALESCE(t.token, ''), s.created_at, s.modified_at
+		FROM subscriptions s
+		LEFT JOIN subscription_tokens t ON t.subscription_id = s.id
+		WHERE s.user_id = ?
+		ORDER BY
+			CASE WHEN s.status = 'active' THEN 0 ELSE 1 END,
+			s.expires_at DESC,
+			s.created_at DESC
+		LIMIT 1`,
+		userID,
+	)
+
+	var sub model.Subscription
+	if err := row.Scan(&sub.ID, &sub.UserID, &sub.Name, &sub.Status, &sub.ExpiresAt, &sub.Token, &sub.CreatedAt, &sub.ModifiedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Subscription{}, ErrNotFound
+		}
+		return model.Subscription{}, fmt.Errorf("load current subscription: %w", err)
+	}
+	items, err := s.listSubscriptionBindingItems(ctx, sub.ID)
+	if err != nil {
+		return model.Subscription{}, err
+	}
+	sub.Bindings = items
+	sub.BindingCount = len(items)
+	return sub, nil
+}
+
+func dedupeStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func (s *Store) replaceSubscriptionBindingItems(ctx context.Context, subscriptionID string, bindingIDs []string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM subscription_binding_items WHERE subscription_id = ?`, subscriptionID); err != nil {
+		return fmt.Errorf("clear subscription bindings: %w", err)
+	}
+
+	now := time.Now().UTC()
+	for _, bindingID := range dedupeStrings(bindingIDs) {
+		id, err := secret.ID("sbind")
+		if err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(
+			ctx,
+			`INSERT INTO subscription_binding_items(id, subscription_id, node_inbound_binding_id, created_at) VALUES(?, ?, ?, ?)`,
+			id,
+			subscriptionID,
+			bindingID,
+			now,
+		); err != nil {
+			return fmt.Errorf("insert subscription binding item: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) listSubscriptionBindingItems(ctx context.Context, subscriptionID string) ([]model.SubscriptionBindingItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			sbi.id,
+			sbi.subscription_id,
+			sbi.node_inbound_binding_id,
+			nb.node_id,
+			n.name,
+			n.address,
+			nb.inbound_profile_id,
+			ip.name,
+			COALESCE(NULLIF(ip.public_host, ''), NULLIF(ip.server_name, ''), n.address, n.name)
+		FROM subscription_binding_items sbi
+		JOIN node_inbound_bindings nb ON nb.id = sbi.node_inbound_binding_id
+		JOIN nodes n ON n.id = nb.node_id
+		JOIN inbound_profiles ip ON ip.id = nb.inbound_profile_id
+		WHERE sbi.subscription_id = ?
+		ORDER BY n.name, ip.name`,
+		subscriptionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list subscription binding items: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.SubscriptionBindingItem
+	for rows.Next() {
+		var item model.SubscriptionBindingItem
+		if err := rows.Scan(
+			&item.ID,
+			&item.SubscriptionID,
+			&item.NodeInboundBindingID,
+			&item.NodeID,
+			&item.NodeName,
+			&item.NodeAddress,
+			&item.InboundProfileID,
+			&item.InboundName,
+			&item.PublicHost,
+		); err != nil {
+			return nil, fmt.Errorf("scan subscription binding item: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) CreateSubscription(ctx context.Context, params CreateSubscriptionParams) (model.Subscription, error) {
+	now := time.Now().UTC()
+	current, err := s.currentSubscriptionByUser(ctx, params.UserID)
+	if err == nil {
+		_, err = s.db.ExecContext(
+			ctx,
+			`UPDATE subscriptions SET name = ?, status = ?, expires_at = ?, modified_at = ? WHERE id = ?`,
+			params.Name,
+			"active",
+			params.ExpiresAt.UTC(),
+			now,
+			current.ID,
+		)
+		if err != nil {
+			return model.Subscription{}, fmt.Errorf("update subscription: %w", err)
+		}
+		if err := s.replaceSubscriptionBindingItems(ctx, current.ID, params.BindingIDs); err != nil {
+			return model.Subscription{}, err
+		}
+		updated, err := s.currentSubscriptionByUser(ctx, params.UserID)
+		if err != nil {
+			return model.Subscription{}, err
+		}
+		_ = s.Audit(ctx, "admin", "update", "subscription", updated.ID, params.Name)
+		return updated, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return model.Subscription{}, err
+	}
+
 	id, err := secret.ID("sub")
 	if err != nil {
 		return model.Subscription{}, err
@@ -746,7 +977,6 @@ func (s *Store) CreateSubscription(ctx context.Context, params CreateSubscriptio
 	if err != nil {
 		return model.Subscription{}, err
 	}
-	now := time.Now().UTC()
 	_, err = s.db.ExecContext(
 		ctx,
 		`INSERT INTO subscriptions(id, user_id, name, status, expires_at, created_at, modified_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -772,8 +1002,15 @@ func (s *Store) CreateSubscription(ctx context.Context, params CreateSubscriptio
 	if err != nil {
 		return model.Subscription{}, fmt.Errorf("insert subscription token: %w", err)
 	}
+	if err := s.replaceSubscriptionBindingItems(ctx, id, params.BindingIDs); err != nil {
+		return model.Subscription{}, err
+	}
+	created, err := s.currentSubscriptionByUser(ctx, params.UserID)
+	if err != nil {
+		return model.Subscription{}, err
+	}
 	_ = s.Audit(ctx, "admin", "create", "subscription", id, params.Name)
-	return model.Subscription{ID: id, UserID: params.UserID, Name: params.Name, Status: "active", ExpiresAt: params.ExpiresAt.UTC(), Token: token, CreatedAt: now, ModifiedAt: now}, nil
+	return created, nil
 }
 
 func (s *Store) ListSubscriptions(ctx context.Context) ([]model.Subscription, error) {
@@ -791,7 +1028,80 @@ func (s *Store) ListSubscriptions(ctx context.Context) ([]model.Subscription, er
 		}
 		out = append(out, sub)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		items, err := s.listSubscriptionBindingItems(ctx, out[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Bindings = items
+		out[i].BindingCount = len(items)
+	}
+	return out, nil
+}
+
+func (s *Store) UpdateUserSubscription(ctx context.Context, userID, name string, expiresAt time.Time) (model.Subscription, error) {
+	current, err := s.currentSubscriptionByUser(ctx, userID)
+	if errors.Is(err, ErrNotFound) {
+		return s.CreateSubscription(ctx, CreateSubscriptionParams{
+			UserID:    userID,
+			Name:      name,
+			ExpiresAt: expiresAt,
+		})
+	}
+	if err != nil {
+		return model.Subscription{}, err
+	}
+
+	now := time.Now().UTC()
+	_, err = s.db.ExecContext(
+		ctx,
+		`UPDATE subscriptions SET name = ?, expires_at = ?, modified_at = ? WHERE id = ?`,
+		name,
+		expiresAt.UTC(),
+		now,
+		current.ID,
+	)
+	if err != nil {
+		return model.Subscription{}, fmt.Errorf("update user subscription: %w", err)
+	}
+	_ = s.Audit(ctx, "admin", "update", "subscription", current.ID, name)
+	return s.currentSubscriptionByUser(ctx, userID)
+}
+
+func (s *Store) SetUserSubscriptionStatus(ctx context.Context, userID, status string) (model.Subscription, error) {
+	current, err := s.currentSubscriptionByUser(ctx, userID)
+	if err != nil {
+		return model.Subscription{}, err
+	}
+	now := time.Now().UTC()
+	_, err = s.db.ExecContext(
+		ctx,
+		`UPDATE subscriptions SET status = ?, modified_at = ? WHERE id = ?`,
+		status,
+		now,
+		current.ID,
+	)
+	if err != nil {
+		return model.Subscription{}, fmt.Errorf("set subscription status: %w", err)
+	}
+	_ = s.Audit(ctx, "admin", "status", "subscription", current.ID, status)
+	return s.currentSubscriptionByUser(ctx, userID)
+}
+
+func (s *Store) ExtendUserSubscription(ctx context.Context, userID string, days int) (model.Subscription, error) {
+	current, err := s.currentSubscriptionByUser(ctx, userID)
+	if err != nil {
+		return model.Subscription{}, err
+	}
+	base := current.ExpiresAt
+	now := time.Now().UTC()
+	if base.Before(now) {
+		base = now
+	}
+	return s.UpdateUserSubscription(ctx, userID, current.Name, base.Add(time.Duration(days)*24*time.Hour))
 }
 
 func (s *Store) CreateInboundProfile(ctx context.Context, params CreateInboundProfileParams) (model.InboundProfile, error) {
@@ -847,7 +1157,7 @@ func (s *Store) CreateInboundProfile(ctx context.Context, params CreateInboundPr
 		Path:                   params.Path,
 		Password:               params.Password,
 		RealityPubKey:          params.RealityPubKey,
-		RealityPrivateKey:     params.RealityPrivateKey,
+		RealityPrivateKey:      params.RealityPrivateKey,
 		RealityHandshakeServer: params.RealityHandshakeServer,
 		RealityHandshakePort:   params.RealityHandshakePort,
 		RealityShort:           params.RealityShort,
@@ -1077,6 +1387,13 @@ func (s *Store) PortalDataByToken(ctx context.Context, token string) (PortalData
 		return PortalData{}, ErrNotFound
 	}
 
+	items, err := s.listSubscriptionBindingItems(ctx, portal.Subscription.ID)
+	if err != nil {
+		return PortalData{}, err
+	}
+	portal.Subscription.Bindings = items
+	portal.Subscription.BindingCount = len(items)
+
 	nodes, err := s.ListNodes(ctx)
 	if err != nil {
 		return PortalData{}, err
@@ -1089,9 +1406,45 @@ func (s *Store) PortalDataByToken(ctx context.Context, token string) (PortalData
 	if err != nil {
 		return PortalData{}, err
 	}
-	portal.Nodes = nodes
-	portal.Inbounds = inbounds
-	portal.Bindings = bindings
+	if len(items) == 0 {
+		portal.Nodes = nodes
+		portal.Inbounds = inbounds
+		portal.Bindings = bindings
+		return portal, nil
+	}
+	selectedBindingIDs := make(map[string]struct{}, len(items))
+	selectedNodeIDs := make(map[string]struct{}, len(items))
+	selectedInboundIDs := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		selectedBindingIDs[item.NodeInboundBindingID] = struct{}{}
+		selectedNodeIDs[item.NodeID] = struct{}{}
+		selectedInboundIDs[item.InboundProfileID] = struct{}{}
+	}
+
+	for _, node := range nodes {
+		if len(selectedNodeIDs) == 0 {
+			continue
+		}
+		if _, ok := selectedNodeIDs[node.ID]; ok {
+			portal.Nodes = append(portal.Nodes, node)
+		}
+	}
+	for _, inbound := range inbounds {
+		if len(selectedInboundIDs) == 0 {
+			continue
+		}
+		if _, ok := selectedInboundIDs[inbound.ID]; ok {
+			portal.Inbounds = append(portal.Inbounds, inbound)
+		}
+	}
+	for _, binding := range bindings {
+		if len(selectedBindingIDs) == 0 {
+			continue
+		}
+		if _, ok := selectedBindingIDs[binding.ID]; ok {
+			portal.Bindings = append(portal.Bindings, binding)
+		}
+	}
 	return portal, nil
 }
 

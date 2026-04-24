@@ -292,6 +292,7 @@
     }
 
     .status-healthy,
+    .status-active,
     .state-true {
       color: var(--accent);
       background: rgba(98, 208, 167, 0.12);
@@ -390,6 +391,67 @@
       width: 18px;
       height: 18px;
       padding: 0;
+    }
+
+    .choice-list {
+      display: grid;
+      gap: 10px;
+      max-height: 280px;
+      padding: 12px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(10, 15, 23, 0.78);
+    }
+
+    .choice-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(146, 170, 201, 0.12);
+      background: rgba(13, 20, 31, 0.9);
+    }
+
+    .choice-item input {
+      width: 18px;
+      height: 18px;
+      margin-top: 2px;
+      padding: 0;
+    }
+
+    .choice-item strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .actions-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .actions-row form {
+      display: block;
+      margin: 0;
+    }
+
+    .actions-row button {
+      width: auto;
+    }
+
+    .button-muted {
+      background: rgba(18, 27, 42, 0.92);
+      border: 1px solid var(--line-strong);
+      color: var(--text);
+    }
+
+    .button-danger {
+      background: rgba(255, 124, 143, 0.14);
+      border: 1px solid rgba(255, 124, 143, 0.24);
+      color: #ffd6dd;
     }
 
     button {
@@ -782,28 +844,92 @@
           </div>
           <div class="table-wrap">
             <table>
-              <tr><th>Имя</th><th>Контакты</th><th>Заметка</th><th>Ключ доступа</th><th>Создан</th></tr>
+              <tr><th>Пользователь</th><th>Контакты и заметка</th><th>Текущая подписка</th><th>Управление</th></tr>
               {{ range .Dashboard.Users }}
               <tr>
                 <td>
                   <div>{{ .Name }}</div>
                   <div class="mono">{{ .ID }}</div>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">
+                    <span class="mono mono-trunc" title="{{ .AccessKey }}">{{ .AccessKey }}</span>
+                    <button type="button" class="copy-btn" data-copy="{{ .AccessKey }}">Ключ</button>
+                  </div>
                 </td>
                 <td>
                   <div>{{ .Email }}</div>
                   {{ if .Telegram }}<div class="small" style="margin-top:4px;">TG: {{ .Telegram }}</div>{{ end }}
+                  <div style="margin-top:8px;">{{ if .Note }}{{ .Note }}{{ else }}<span class="small">Без заметки</span>{{ end }}</div>
                 </td>
-                <td>{{ if .Note }}{{ .Note }}{{ else }}<span class="small">—</span>{{ end }}</td>
                 <td>
-                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <span class="mono mono-trunc" title="{{ .AccessKey }}">{{ .AccessKey }}</span>
-                    <button type="button" class="copy-btn" data-copy="{{ .AccessKey }}">Копировать</button>
+                  {{ if .CurrentSubscriptionID }}
+                  <div>{{ .CurrentSubscriptionName }}</div>
+                  <div class="small" style="margin-top:6px;">До {{ formatDateTime .CurrentSubscriptionExpiresAt }}</div>
+                  <div class="actions-row" style="margin-top:8px;">
+                    <span class="pill status-{{ .CurrentSubscriptionStatus }}">{{ statusLabel .CurrentSubscriptionStatus }}</span>
+                    {{ if .CurrentSubscriptionToken }}
+                    <button type="button" class="copy-btn" data-copy="{{ $.EffectiveBaseURL }}/subscription/{{ .CurrentSubscriptionToken }}">Feed</button>
+                    {{ end }}
+                  </div>
+                  {{ else }}
+                  <span class="small">Подписка ещё не создана.</span>
+                  {{ end }}
+                </td>
+                <td>
+                  <form method="post" action="/admin/users/update">
+                    <input type="hidden" name="redirect_to" value="/users">
+                    <input type="hidden" name="user_id" value="{{ .ID }}">
+                    <div class="form-grid">
+                      <div class="field">
+                        <label>Имя</label>
+                        <input name="name" value="{{ .Name }}" required>
+                      </div>
+                      <div class="field">
+                        <label>Email</label>
+                        <input name="email" type="email" value="{{ .Email }}" required>
+                      </div>
+                      <div class="field">
+                        <label>Telegram</label>
+                        <input name="telegram" value="{{ .Telegram }}" placeholder="@username или ID">
+                      </div>
+                      <div class="field">
+                        <label>Заметка</label>
+                        <input name="note" value="{{ .Note }}" placeholder="доп. информация">
+                      </div>
+                      <div class="field">
+                        <label>Подписка</label>
+                        <input name="subscription_name" value="{{ .CurrentSubscriptionName }}" placeholder="default-plan">
+                      </div>
+                      <div class="field">
+                        <label>Активен до</label>
+                        <input name="subscription_expires_at" type="datetime-local" value="{{ formatDateTimeInput .CurrentSubscriptionExpiresAt }}">
+                      </div>
+                    </div>
+                    <div class="actions-row" style="margin-top:10px;">
+                      <button type="submit">Сохранить</button>
+                    </div>
+                  </form>
+                  <div class="actions-row" style="margin-top:10px;">
+                    <form method="post" action="/admin/users/freeze">
+                      <input type="hidden" name="redirect_to" value="/users">
+                      <input type="hidden" name="user_id" value="{{ .ID }}">
+                      <button type="submit" class="button-danger">Заморозить</button>
+                    </form>
+                    <form method="post" action="/admin/users/activate">
+                      <input type="hidden" name="redirect_to" value="/users">
+                      <input type="hidden" name="user_id" value="{{ .ID }}">
+                      <button type="submit" class="button-muted">Разморозить</button>
+                    </form>
+                    <form method="post" action="/admin/users/extend">
+                      <input type="hidden" name="redirect_to" value="/users">
+                      <input type="hidden" name="user_id" value="{{ .ID }}">
+                      <input type="hidden" name="days" value="30">
+                      <button type="submit" class="button-muted">+30 дней</button>
+                    </form>
                   </div>
                 </td>
-                <td>{{ formatDateTime .CreatedAt }}</td>
               </tr>
               {{ else }}
-              <tr><td colspan="5">Пользователей пока нет.</td></tr>
+              <tr><td colspan="4">Пользователей пока нет.</td></tr>
               {{ end }}
             </table>
           </div>
@@ -847,7 +973,7 @@
           </div>
           <div class="table-wrap">
             <table>
-              <tr><th>Пользователь</th><th>Подписка</th><th>Срок</th><th>Ссылки</th></tr>
+              <tr><th>Пользователь</th><th>Подписка</th><th>Срок</th><th>Что входит</th><th>Ссылки</th></tr>
               {{ range .Dashboard.Subscriptions }}
               <tr>
                 <td>
@@ -860,6 +986,14 @@
                 </td>
                 <td>{{ formatDateTime .ExpiresAt }}</td>
                 <td>
+                  <div>{{ .BindingCount }} точек публикации</div>
+                  {{ range .Bindings }}
+                  <div class="small" style="margin-top:6px;">{{ .NodeName }} · {{ .PublicHost }} · {{ .InboundName }}</div>
+                  {{ else }}
+                  <div class="small" style="margin-top:6px;">Ничего не выбрано</div>
+                  {{ end }}
+                </td>
+                <td>
                   <div class="inline-links">
                     <a class="endpoint" href="/portal/{{ .Token }}">Портал</a>
                     <a class="endpoint" href="/subscription/{{ .Token }}">Feed</a>
@@ -871,7 +1005,7 @@
                 </td>
               </tr>
               {{ else }}
-              <tr><td colspan="4">Подписок пока нет.</td></tr>
+              <tr><td colspan="5">Подписок пока нет.</td></tr>
               {{ end }}
             </table>
           </div>
@@ -879,8 +1013,8 @@
 
         <article class="card">
           <div class="section-title">
-            <h2>Новая подписка</h2>
-            <span class="small">Выпуск ссылки на портал и feed</span>
+            <h2>Подписка пользователя</h2>
+            <span class="small">Для выбранного пользователя запись будет создана или обновлена</span>
           </div>
           <form method="post" action="/admin/subscriptions">
             <input type="hidden" name="redirect_to" value="/subscriptions">
@@ -897,6 +1031,22 @@
             <div class="field">
               <label for="subscription-days">Срок действия, дней</label>
               <input id="subscription-days" name="days" type="number" min="1" max="36500" value="30">
+            </div>
+            <div class="field">
+              <label>Включить в подписку</label>
+              <div class="choice-list">
+                {{ range .BindingCatalog }}
+                <label class="choice-item">
+                  <input type="checkbox" name="binding_id" value="{{ .NodeInboundBindingID }}">
+                  <span>
+                    <strong>{{ .NodeName }} · {{ .PublicHost }}</strong>
+                    <span class="small">Inbound: {{ .InboundName }}</span>
+                  </span>
+                </label>
+                {{ else }}
+                <div class="small">Сначала создайте inbound и привяжите его к узлу.</div>
+                {{ end }}
+              </div>
             </div>
             <button type="submit">Выпустить подписку</button>
           </form>
@@ -960,6 +1110,7 @@
               <div class="field">
                 <label for="inbound-name">Название</label>
                 <input id="inbound-name" name="name" placeholder="edge-vless-main" required>
+                <span class="small">Имя можно поправить вручную, но при смене протокола/транспорта/порта оно подставляется автоматически, пока поле пустое.</span>
               </div>
               <div class="field">
                 <label for="inbound-protocol">Протокол</label>
@@ -1021,10 +1172,18 @@
                   <input id="inbound-password" name="password" type="password" placeholder="secret">
                   <button type="button" class="input-action" onclick="togglePassword('inbound-password', this)">Показать</button>
                 </div>
+                <span class="small">Если оставить пустым для Trojan, Hysteria2 или Shadowsocks, панель сгенерирует secret сама.</span>
               </div>
               <div class="field" data-toggle="protocol=shadowsocks">
                 <label for="inbound-ss-method">Shadowsocks method</label>
-                <input id="inbound-ss-method" name="shadowsocks_method" value="chacha20-ietf-poly1305">
+                <select id="inbound-ss-method" name="shadowsocks_method">
+                  <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+                  <option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option>
+                  <option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm</option>
+                  <option value="2022-blake3-chacha20-poly1305">2022-blake3-chacha20-poly1305</option>
+                  <option value="aes-128-gcm">aes-128-gcm</option>
+                  <option value="aes-256-gcm">aes-256-gcm</option>
+                </select>
               </div>
               <div class="field" data-toggle="tls_mode=tls">
                 <label for="inbound-tls-cert">TLS certificate path</label>
@@ -1037,6 +1196,7 @@
               <div class="field" data-toggle="tls_mode=reality">
                 <label for="inbound-reality-pub">REALITY public key</label>
                 <input id="inbound-reality-pub" name="reality_public_key" placeholder="public key">
+                <span class="small">Можно оставить пустым: панель сгенерирует keypair автоматически.</span>
               </div>
               <div class="field" data-toggle="tls_mode=reality">
                 <label for="inbound-reality-private">REALITY private key</label>
@@ -1053,6 +1213,7 @@
               <div class="field" data-toggle="tls_mode=reality">
                 <label for="inbound-reality-short">REALITY short id</label>
                 <input id="inbound-reality-short" name="reality_short_id" placeholder="abcd1234">
+                <span class="small">Если пусто, будет сгенерирован автоматически.</span>
               </div>
             </div>
             <button type="submit">Создать inbound</button>
@@ -1293,9 +1454,42 @@
         btn.textContent = show ? "Скрыть" : "Показать";
       };
 
+      // ── Inbound name autofill ────────────────────────────────
+      var inboundName = document.getElementById("inbound-name");
+      var inboundProtocol = document.getElementById("inbound-protocol");
+      var inboundTransport = document.getElementById("inbound-transport");
+      var inboundTLS = document.getElementById("inbound-tls");
+      var inboundPort = document.getElementById("inbound-port");
+      var inboundNameTouched = false;
+
+      if (inboundName) {
+        inboundName.addEventListener("input", function () {
+          inboundNameTouched = inboundName.value.trim() !== "";
+        });
+      }
+
+      function refreshInboundName() {
+        if (!inboundName || inboundNameTouched) return;
+        var protocol = inboundProtocol ? inboundProtocol.value : "vless";
+        var transport = inboundTransport ? inboundTransport.value : "";
+        var tlsMode = inboundTLS ? inboundTLS.value : "";
+        var port = inboundPort ? inboundPort.value : "443";
+        var parts = ["edge", protocol];
+        if (transport) parts.push(transport);
+        if (tlsMode) parts.push(tlsMode);
+        parts.push(port);
+        inboundName.value = parts.join("-");
+      }
+
+      [inboundProtocol, inboundTransport, inboundTLS, inboundPort].forEach(function (control) {
+        if (!control) return;
+        control.addEventListener("change", refreshInboundName);
+        control.addEventListener("input", refreshInboundName);
+      });
+      refreshInboundName();
+
       // ── Conditional field toggle ─────────────────────────────
       var groups = document.querySelectorAll("[data-toggle]");
-      if (!groups.length) return;
 
       function refresh() {
         var protocolControl = document.querySelector('[name="protocol"]');
@@ -1336,7 +1530,7 @@
         control.addEventListener("change", refresh);
       });
 
-      refresh();
+      if (groups.length) refresh();
     })();
   </script>
 </body>
