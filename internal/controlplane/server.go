@@ -9,12 +9,16 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mgb-panel/internal/database"
 	"mgb-panel/internal/model"
+	"mgb-panel/internal/nodeagent"
 	"mgb-panel/internal/pki"
 	"mgb-panel/internal/subscriptions"
 	"mgb-panel/internal/topology"
@@ -24,26 +28,37 @@ import (
 var templateFS embed.FS
 
 type Server struct {
-	store      *database.Store
-	authority  *pki.Authority
-	baseURL    string
-	templates  *template.Template
-	httpServer *http.Server
+	store       *database.Store
+	authority   *pki.Authority
+	baseURL     string
+	listenAddr  string
+	dataDir     string
+	singboxBin  string
+	localPoll   time.Duration
+	templates   *template.Template
+	httpServer  *http.Server
+	agentMu     sync.Mutex
+	agentCancel context.CancelFunc
 }
 
 type Config struct {
-	ListenAddr string
-	BaseURL    string
+	ListenAddr    string
+	BaseURL       string
+	DataDir       string
+	SingboxBinary string
+	LocalPoll     time.Duration
 }
 
 type adminPageData struct {
-	BaseURL       string
-	CAFingerprint string
-	Dashboard     model.Dashboard
-	Page          string
-	NodeNames     map[string]string
-	UserNames     map[string]string
-	InboundNames  map[string]string
+	BaseURL          string
+	EffectiveBaseURL string
+	CAFingerprint    string
+	Dashboard        model.Dashboard
+	Page             string
+	NodeNames        map[string]string
+	UserNames        map[string]string
+	InboundNames     map[string]string
+	LocalNode        *model.Node
 }
 
 func New(store *database.Store, authority *pki.Authority, cfg Config) (*Server, error) {
@@ -62,11 +77,19 @@ func New(store *database.Store, authority *pki.Authority, cfg Config) (*Server, 
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
 	}
+	poll := cfg.LocalPoll
+	if poll <= 0 {
+		poll = 20 * time.Second
+	}
 	srv := &Server{
-		store:     store,
-		authority: authority,
-		baseURL:   strings.TrimRight(cfg.BaseURL, "/"),
-		templates: tmpl,
+		store:      store,
+		authority:  authority,
+		baseURL:    strings.TrimRight(cfg.BaseURL, "/"),
+		listenAddr: cfg.ListenAddr,
+		dataDir:    cfg.DataDir,
+		singboxBin: cfg.SingboxBinary,
+		localPoll:  poll,
+		templates:  tmpl,
 	}
 
 	mux := http.NewServeMux()
@@ -87,6 +110,7 @@ func New(store *database.Store, authority *pki.Authority, cfg Config) (*Server, 
 	mux.HandleFunc("/admin/inbounds", srv.handleCreateInboundForm)
 	mux.HandleFunc("/admin/bindings", srv.handleCreateBindingForm)
 	mux.HandleFunc("/admin/topology", srv.handleCreateTopologyForm)
+	mux.HandleFunc("/admin/nodes/enable-local", srv.handleEnableLocalNode)
 
 	mux.HandleFunc("/api/admin/nodes", srv.handleAdminNodesAPI)
 	mux.HandleFunc("/api/admin/users", srv.handleAdminUsersAPI)
@@ -152,16 +176,21 @@ func (s *Server) renderAdminPage(w http.ResponseWriter, r *http.Request, page st
 		return
 	}
 	data := adminPageData{
-		BaseURL:       s.baseURL,
-		CAFingerprint: s.authority.FingerprintHex(),
-		Dashboard:     dashboard,
-		Page:          page,
-		NodeNames:     make(map[string]string, len(dashboard.Nodes)),
-		UserNames:     make(map[string]string, len(dashboard.Users)),
-		InboundNames:  make(map[string]string, len(dashboard.Inbounds)),
+		BaseURL:          s.baseURL,
+		EffectiveBaseURL: s.effectiveBaseURL(r),
+		CAFingerprint:    s.authority.FingerprintHex(),
+		Dashboard:        dashboard,
+		Page:             page,
+		NodeNames:        make(map[string]string, len(dashboard.Nodes)),
+		UserNames:        make(map[string]string, len(dashboard.Users)),
+		InboundNames:     make(map[string]string, len(dashboard.Inbounds)),
 	}
 	for _, node := range dashboard.Nodes {
 		data.NodeNames[node.ID] = node.Name
+		if node.IsLocal {
+			n := node
+			data.LocalNode = &n
+		}
 	}
 	for _, user := range dashboard.Users {
 		data.UserNames[user.ID] = user.Name
@@ -900,11 +929,113 @@ func nodeInstallCommand(baseURL, enrollToken, fingerprint string) string {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	enrollToken = strings.TrimSpace(enrollToken)
 	fingerprint = strings.TrimSpace(fingerprint)
+	// -k is required because the panel uses a custom CA;
+	// the script itself verifies the CA fingerprint before trusting anything.
 	return fmt.Sprintf(
-		"curl -fsSL %s/install/node.sh | bash -s -- --panel-url %s --bootstrap-token %s --panel-fingerprint %s",
+		"curl -fsSLk %s/install/node.sh | bash -s -- --panel-url %s --bootstrap-token %s --panel-fingerprint %s",
 		baseURL,
 		baseURL,
 		enrollToken,
 		fingerprint,
 	)
+}
+
+// effectiveBaseURL returns the URL that the browser is actually using,
+// falling back to request host when baseURL is a placeholder.
+func (s *Server) effectiveBaseURL(r *http.Request) string {
+	parsed, err := url.Parse(s.baseURL)
+	if err != nil {
+		return "https://" + r.Host
+	}
+	host := parsed.Hostname()
+	if host == "localhost" || host == "127.0.0.1" ||
+		strings.HasSuffix(host, ".example.com") ||
+		strings.HasSuffix(host, ".example.org") ||
+		host == "example.com" || host == "example.org" {
+		return "https://" + r.Host
+	}
+	return s.baseURL
+}
+
+// localPanelURL returns a loopback URL suitable for the in-process node agent.
+// The panel TLS cert always includes 127.0.0.1 as an IP SAN.
+func (s *Server) localPanelURL() string {
+	_, port, err := net.SplitHostPort(s.listenAddr)
+	if err != nil || port == "" {
+		port = "8443"
+	}
+	return "https://127.0.0.1:" + port
+}
+
+func (s *Server) handleEnableLocalNode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	dashboard, err := s.store.Dashboard(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var token string
+	for _, n := range dashboard.Nodes {
+		if n.IsLocal {
+			token = n.EnrollToken
+			break
+		}
+	}
+	if token == "" {
+		n, err := s.store.CreateNode(r.Context(), database.CreateNodeParams{
+			Name:    "local-panel",
+			Address: "127.0.0.1",
+			Role:    "edge",
+			IsLocal: true,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		token = n.EnrollToken
+	}
+
+	if s.dataDir != "" && s.singboxBin != "" {
+		if err := s.startLocalAgent(token); err != nil {
+			http.Error(w, "запуск агента: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	http.Redirect(w, r, "/nodes", http.StatusSeeOther)
+}
+
+func (s *Server) startLocalAgent(token string) error {
+	s.agentMu.Lock()
+	defer s.agentMu.Unlock()
+
+	if s.agentCancel != nil {
+		s.agentCancel()
+		s.agentCancel = nil
+	}
+
+	agent, err := nodeagent.New(nodeagent.Config{
+		PanelURL:         s.localPanelURL(),
+		StateDir:         filepath.Join(s.dataDir, "local-node"),
+		BootstrapToken:   token,
+		PanelCAFile:      filepath.Join(s.dataDir, "pki", "ca.pem"),
+		SingboxBinary:    s.singboxBin,
+		PollInterval:     s.localPoll,
+		PanelFingerprint: s.authority.FingerprintHex(),
+	})
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.agentCancel = cancel
+	go func() {
+		if err := agent.Run(ctx); err != nil && err != context.Canceled {
+			log.Printf("local node agent: %v", err)
+		}
+	}()
+	return nil
 }

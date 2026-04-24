@@ -53,8 +53,11 @@ func main() {
 	}
 
 	server, err := controlplane.New(store, authority, controlplane.Config{
-		ListenAddr: *listenAddr,
-		BaseURL:    *baseURL,
+		ListenAddr:    *listenAddr,
+		BaseURL:       *baseURL,
+		DataDir:       *dataDir,
+		SingboxBinary: *singboxBinary,
+		LocalPoll:     *localNodePoll,
 	})
 	if err != nil {
 		log.Fatalf("build server: %v", err)

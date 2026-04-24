@@ -655,7 +655,7 @@
       {{ end }}
 
       {{ if eq .Page "nodes" }}
-      <section class="grid-2">
+      <div class="stack">
         <article class="card stack">
           <div class="section-title">
             <h2>Список узлов</h2>
@@ -667,73 +667,107 @@
               {{ range .Dashboard.Nodes }}
               <tr>
                 <td>
-                  <div>{{ .Name }}</div>
-                  <div class="mono">{{ .ID }}</div>
-                  {{ if .IsLocal }}<div class="small">Локальный узел панели</div>{{ end }}
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <strong>{{ .Name }}</strong>
+                    {{ if .IsLocal }}<span class="tag" style="font-size:10px;">local</span>{{ end }}
+                  </div>
+                  <div class="mono" style="margin-top:4px;font-size:11px;color:var(--muted);">{{ .ID }}</div>
                 </td>
                 <td>
-                  <div>{{ if .Address }}{{ .Address }}{{ else }}<span class="small">Не задан</span>{{ end }}</div>
-                  <div class="small" style="margin-top:8px;">Последний source IP: {{ if .LastSeenIP }}{{ .LastSeenIP }}{{ else }}неизвестно{{ end }}</div>
+                  <div>{{ if .Address }}{{ .Address }}{{ else }}<span class="small">—</span>{{ end }}</div>
+                  <div class="small" style="margin-top:4px;">IP: {{ if .LastSeenIP }}{{ .LastSeenIP }}{{ else }}—{{ end }}</div>
                 </td>
-                <td>
-                  <span class="tag">{{ roleLabel .Role }}</span>
-                  <div class="small" style="margin-top:8px;">Текущая ревизия: {{ .ActiveRevision }}</div>
-                </td>
+                <td><span class="tag">{{ roleLabel .Role }}</span></td>
                 <td>
                   <span class="pill status-{{ .Status }}">{{ statusLabel .Status }}</span>
-                  <div class="small" style="margin-top:8px;">Heartbeat: {{ formatDateTime .LastHeartbeat }}</div>
-                  {{ if .LastApplyError }}<div class="small" style="margin-top:8px;color:var(--danger);">{{ .LastApplyError }}</div>{{ end }}
+                  <div class="small" style="margin-top:6px;">{{ formatDateTime .LastHeartbeat }}</div>
+                  {{ if .LastApplyError }}<div class="small" style="margin-top:4px;color:var(--danger);">{{ .LastApplyError }}</div>{{ end }}
                 </td>
                 <td>
+                  {{ if .IsLocal }}
+                  <span class="small">Запущен в процессе панели</span>
+                  {{ else }}
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                     <span class="mono mono-trunc" title="{{ .EnrollToken }}">{{ .EnrollToken }}</span>
                     <button type="button" class="copy-btn" data-copy="{{ .EnrollToken }}">Токен</button>
                   </div>
-                  <div class="inline-links" style="margin-top:10px;">
-                    <a class="endpoint" href="/api/pki/ca">Скачать CA</a>
-                    <button type="button" class="copy-btn" data-copy="{{ nodeInstallCommand $.BaseURL .EnrollToken $.CAFingerprint }}">Скопировать команду установки</button>
+                  <div style="margin-top:8px;">
+                    <button type="button" class="copy-btn" data-copy="{{ nodeInstallCommand $.EffectiveBaseURL .EnrollToken $.CAFingerprint }}">Скопировать команду установки</button>
+                    <a class="copy-btn" href="/api/pki/ca" style="margin-left:6px;text-decoration:none;">Скачать CA</a>
                   </div>
+                  {{ end }}
                 </td>
               </tr>
               {{ else }}
-              <tr><td colspan="5">Узлы ещё не созданы.</td></tr>
+              <tr><td colspan="5" class="empty" style="border:none;">Узлы ещё не созданы.</td></tr>
               {{ end }}
             </table>
           </div>
         </article>
 
-        <article class="card">
-          <div class="section-title">
-            <h2>Новый узел</h2>
-            <span class="small">Адрес задаётся сразу, затем панель выдаёт токен, CA и install-команду</span>
-          </div>
-          <form method="post" action="/admin/nodes">
-            <input type="hidden" name="redirect_to" value="/nodes">
-            <div class="field">
-              <label for="node-name">Название</label>
-              <input id="node-name" name="name" placeholder="edge-ru-01" required>
+        <section class="grid-2">
+          <article class="card">
+            <div class="section-title">
+              <h2>Добавить удалённый узел</h2>
             </div>
-            <div class="field">
-              <label for="node-address">IP или домен узла</label>
-              <input id="node-address" name="address" placeholder="150.241.74.147" required>
+            <p class="small" style="margin:0 0 14px;">После создания — скопируйте готовую bootstrap-команду и выполните её на сервере узла. Скрипт установит Docker, скачает CA, проверит fingerprint и запустит node-agent.</p>
+            <form method="post" action="/admin/nodes">
+              <input type="hidden" name="redirect_to" value="/nodes">
+              <div class="field">
+                <label for="node-name">Название</label>
+                <input id="node-name" name="name" placeholder="edge-ru-01" required>
+              </div>
+              <div class="field">
+                <label for="node-address">IP или домен</label>
+                <input id="node-address" name="address" placeholder="150.241.74.147" required>
+              </div>
+              <div class="field">
+                <label for="node-role">Роль</label>
+                <select id="node-role" name="role">
+                  <option value="edge">Edge — точка входа клиентов</option>
+                  <option value="relay">Relay — промежуточный узел</option>
+                  <option value="egress">Egress — точка выхода</option>
+                </select>
+              </div>
+              <button type="submit">Создать узел</button>
+            </form>
+          </article>
+
+          <article class="card">
+            {{ if .LocalNode }}
+            <div class="section-title">
+              <h2>Локальный узел</h2>
+              <span class="pill status-{{ .LocalNode.Status }}">{{ statusLabel .LocalNode.Status }}</span>
             </div>
-            <div class="field">
-              <label for="node-role">Роль</label>
-              <select id="node-role" name="role">
-                <option value="edge">Edge</option>
-                <option value="relay">Relay</option>
-                <option value="egress">Egress</option>
-              </select>
+            <p class="small" style="margin:0 0 14px;">sing-box запущен в том же процессе что и панель. Управляется автоматически.</p>
+            <div class="list" style="gap:8px;">
+              <div class="list" style="display:grid;gap:6px;padding:0;list-style:none;">
+                <div style="display:flex;justify-content:space-between;font-size:13px;">
+                  <span class="small">Имя</span><strong>{{ .LocalNode.Name }}</strong>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:13px;">
+                  <span class="small">Ревизия</span><strong>{{ .LocalNode.ActiveRevision }}</strong>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:13px;">
+                  <span class="small">Heartbeat</span><strong>{{ formatDateTime .LocalNode.LastHeartbeat }}</strong>
+                </div>
+              </div>
             </div>
-            <label class="checkbox"><input type="checkbox" name="is_local"> Панель запускается на этом же узле</label>
-            <button type="submit">Создать узел</button>
-          </form>
-          <div class="api-box">
-            <div class="small">Установка node-agent</div>
-            <div class="small" style="margin-top:8px;">После создания узла панель покажет готовую bootstrap-команду. Скрипт скачает CA сертификат, проверит отпечаток и поднимет контейнер node-agent.</div>
-          </div>
-        </article>
-      </section>
+            {{ if .LocalNode.LastApplyError }}
+            <div class="small" style="margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(255,124,143,0.08);border:1px solid rgba(255,124,143,0.2);color:var(--danger);">{{ .LocalNode.LastApplyError }}</div>
+            {{ end }}
+            {{ else }}
+            <div class="section-title">
+              <h2>sing-box на этом сервере</h2>
+            </div>
+            <p class="small" style="margin:0 0 14px;">Запустить sing-box прямо в процессе панели — без отдельного сервера. Идеально когда панель и первый узел на одной машине.</p>
+            <form method="post" action="/admin/nodes/enable-local">
+              <button type="submit">Запустить локальный узел</button>
+            </form>
+            {{ end }}
+          </article>
+        </section>
+      </div>
       {{ end }}
 
       {{ if eq .Page "users" }}
