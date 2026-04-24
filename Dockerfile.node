@@ -1,19 +1,26 @@
 ARG SINGBOX_IMAGE=ghcr.io/sagernet/sing-box:v1.13.11
 ARG SINGBOX_BINARY_PATH=/usr/local/bin/sing-box
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
 FROM golang:1.22-bookworm AS builder
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/node-agent ./cmd/node-agent
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/node-agent ./cmd/node-agent
 
-FROM ${SINGBOX_IMAGE} AS singbox
-
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+FROM ${SINGBOX_IMAGE}
+ARG SINGBOX_BINARY_PATH
 WORKDIR /var/lib/mgb-node
 COPY --from=builder /out/node-agent /usr/local/bin/node-agent
-COPY --from=singbox ${SINGBOX_BINARY_PATH} /usr/local/bin/sing-box
-RUN chmod 0755 /usr/local/bin/sing-box
+RUN set -eux; \
+    chmod 0755 /usr/local/bin/node-agent; \
+    if [ "${SINGBOX_BINARY_PATH}" != "/usr/local/bin/sing-box" ]; then \
+      cp "${SINGBOX_BINARY_PATH}" /usr/local/bin/sing-box; \
+    fi; \
+    chmod 0755 /usr/local/bin/sing-box; \
+    /usr/local/bin/sing-box version >/dev/null
 ENTRYPOINT ["node-agent"]

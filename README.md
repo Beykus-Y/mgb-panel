@@ -155,8 +155,8 @@ If the installer detects an existing installation in the target directory, it as
 
 Notes:
 
-- `Dockerfile.node` copies `sing-box` from `ghcr.io/sagernet/sing-box:v1.13.11` by default.
-- If that image exposes the binary at a different path in your environment, override `SINGBOX_BINARY_PATH`.
+- `Dockerfile.node` uses `ghcr.io/sagernet/sing-box:v1.13.11` as the node runtime image by default and copies the static `node-agent` binary into it.
+- If a custom `SINGBOX_IMAGE` exposes the binary at a different path, override `SINGBOX_BINARY_PATH`; the build normalizes it to `/usr/local/bin/sing-box`.
 - `deploy/node/docker-compose.yml` uses `network_mode: host` and `NET_ADMIN` because node deployments commonly need direct networking control.
 - Local node mode no longer runs `sing-box` inside the panel process. Compose starts a separate dormant `local-node` service with host networking; click "Включить локальный узел" in the panel to write its bootstrap token and enroll it.
 
