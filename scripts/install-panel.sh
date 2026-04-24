@@ -12,6 +12,23 @@ warn() { printf "%b[WARN]%b %s\n" "$COLOR_YELLOW" "$COLOR_RESET" "$*"; }
 error() { printf "%b[ERR ]%b %s\n" "$COLOR_RED" "$COLOR_RESET" "$*" >&2; }
 success() { printf "%b[ OK ]%b %s\n" "$COLOR_GREEN" "$COLOR_RESET" "$*"; }
 
+has_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+run_privileged() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+    return
+  fi
+  if has_cmd sudo; then
+    sudo "$@"
+    return
+  fi
+  error "Нужны root-права или sudo для выполнения: $*"
+  exit 1
+}
+
 prompt() {
   local var_name="$1"
   local label="$2"
@@ -32,13 +49,6 @@ prompt() {
   printf -v "$var_name" "%s" "$answer"
 }
 
-require_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    error "Команда '$1' не найдена"
-    exit 1
-  fi
-}
-
 choose_existing_action() {
   local answer
   printf "Обнаружена существующая установка панели в %s\n" "$INSTALL_DIR"
@@ -54,6 +64,18 @@ choose_existing_action() {
       exit 1
       ;;
   esac
+}
+
+detect_local_repo() {
+  local script_source="${BASH_SOURCE[0]:-}"
+  local script_dir
+  if [[ -z "$script_source" ]]; then
+    return
+  fi
+  script_dir="$(cd "$(dirname "$script_source")" && pwd)"
+  if [[ -f "$script_dir/../go.mod" && -f "$script_dir/../deploy/panel/docker-compose.yml" ]]; then
+    LOCAL_REPO_DIR="$(cd "$script_dir/.." && pwd)"
+  fi
 }
 
 ensure_repo() {
@@ -83,7 +105,7 @@ has_existing_install() {
 delete_install() {
   if [[ -f "$ENV_FILE" && -f "$COMPOSE_FILE" ]]; then
     info "Останавливаю текущую панель"
-    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" down --remove-orphans || true
+    compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" down --remove-orphans || true
   fi
 
   if [[ -n "${LOCAL_REPO_DIR:-}" ]]; then
@@ -106,6 +128,77 @@ LOCAL_NODE_TOKEN=$LOCAL_NODE_TOKEN
 SINGBOX_IMAGE=$SINGBOX_IMAGE
 SINGBOX_BINARY_PATH=$SINGBOX_BINARY_PATH
 EOF
+}
+
+install_docker_if_missing() {
+  if has_cmd docker && (docker compose version >/dev/null 2>&1 || has_cmd docker-compose); then
+    return
+  fi
+
+  local answer
+  printf "Docker Engine или Compose не найдены.\n"
+  read -r -p "Установить Docker автоматически через официальный get.docker.com? [Y/n]: " answer
+  answer="${answer:-Y}"
+  case "$answer" in
+    n|N|no|нет)
+      error "Docker не установлен"
+      exit 1
+      ;;
+  esac
+
+  if ! has_cmd curl; then
+    error "Для автоустановки Docker нужен curl"
+    exit 1
+  fi
+
+  local tmp_script
+  tmp_script="$(mktemp)"
+  trap 'rm -f "$tmp_script"' EXIT
+  info "Скачиваю официальный installer Docker"
+  curl -fsSL https://get.docker.com -o "$tmp_script"
+  run_privileged sh "$tmp_script"
+  rm -f "$tmp_script"
+  trap - EXIT
+
+  if has_cmd systemctl; then
+    run_privileged systemctl enable --now docker || true
+  elif has_cmd service; then
+    run_privileged service docker start || true
+  fi
+}
+
+ensure_docker_running() {
+  if docker info >/dev/null 2>&1; then
+    return
+  fi
+
+  if has_cmd systemctl; then
+    run_privileged systemctl start docker || true
+  elif has_cmd service; then
+    run_privileged service docker start || true
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    error "Docker установлен, но демон недоступен. Проверь service docker status"
+    exit 1
+  fi
+}
+
+set_compose_cmd() {
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD=("docker" "compose")
+    return
+  fi
+  if has_cmd docker-compose; then
+    COMPOSE_CMD=("docker-compose")
+    return
+  fi
+  error "Не найден ни docker compose, ни docker-compose"
+  exit 1
+}
+
+compose_run() {
+  "${COMPOSE_CMD[@]}" "$@"
 }
 
 usage() {
@@ -135,10 +228,10 @@ ENABLE_LOCAL_NODE="${ENABLE_LOCAL_NODE:-false}"
 LOCAL_NODE_TOKEN="${LOCAL_NODE_TOKEN:-}"
 SINGBOX_IMAGE="${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
 SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$SCRIPT_DIR/../go.mod" && -f "$SCRIPT_DIR/../deploy/panel/docker-compose.yml" ]]; then
-  LOCAL_REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-fi
+EXISTING_ACTION=""
+COMPOSE_CMD=()
+
+detect_local_repo
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -171,15 +264,15 @@ fi
 PANEL_STATE_DIR="$INSTALL_DIR/state"
 ENV_FILE="$INSTALL_DIR/panel.env"
 COMPOSE_FILE="$REPO_DIR/deploy/panel/docker-compose.yml"
-EXISTING_ACTION=""
 
-require_cmd git
-require_cmd docker
-
-if ! docker compose version >/dev/null 2>&1; then
-  error "Требуется docker compose"
+if ! has_cmd git; then
+  error "Команда 'git' не найдена"
   exit 1
 fi
+
+install_docker_if_missing
+ensure_docker_running
+set_compose_cmd
 
 mkdir -p "$INSTALL_DIR" "$PANEL_STATE_DIR"
 
@@ -205,7 +298,7 @@ if [[ "$EXISTING_ACTION" == "update" ]]; then
 else
   info "Запускаю панель через Docker Compose"
 fi
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
+compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
 
 success "Панель установлена"
 printf "\n"
