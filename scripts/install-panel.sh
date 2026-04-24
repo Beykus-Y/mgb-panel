@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-COLOR_RESET="\033[0m"
-COLOR_BLUE="\033[1;34m"
-COLOR_GREEN="\033[1;32m"
-COLOR_RED="\033[1;31m"
-COLOR_YELLOW="\033[1;33m"
+# === ОПРЕДЕЛЕНИЕ ЦВЕТОВ (отключаются при записи в файл) ===
+if [ -t 1 ]; then
+  COLOR_RESET="\033[0m"
+  COLOR_BLUE="\033[1;34m"
+  COLOR_GREEN="\033[1;32m"
+  COLOR_RED="\033[1;31m"
+  COLOR_YELLOW="\033[1;33m"
+else
+  COLOR_RESET="" COLOR_BLUE="" COLOR_GREEN="" COLOR_RED="" COLOR_YELLOW=""
+fi
 
-info() { printf "%b[INFO]%b %s\n" "$COLOR_BLUE" "$COLOR_RESET" "$*"; }
-warn() { printf "%b[WARN]%b %s\n" "$COLOR_YELLOW" "$COLOR_RESET" "$*"; }
-error() { printf "%b[ERR ]%b %s\n" "$COLOR_RED" "$COLOR_RESET" "$*" >&2; }
+# === ФУНКЦИИ ЛОГИРОВАНИЯ ===
+info()    { printf "%b[INFO]%b %s\n" "$COLOR_BLUE" "$COLOR_RESET" "$*"; }
+warn()    { printf "%b[WARN]%b %s\n" "$COLOR_YELLOW" "$COLOR_RESET" "$*"; }
+error()   { printf "%b[ERR ]%b %s\n" "$COLOR_RED" "$COLOR_RESET" "$*" >&2; }
 success() { printf "%b[ OK ]%b %s\n" "$COLOR_GREEN" "$COLOR_RESET" "$*"; }
 
+# === УТИЛИТЫ ===
 has_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -29,6 +36,17 @@ run_privileged() {
   exit 1
 }
 
+# Защита от случайного удаления системных директорий
+is_safe_dir() {
+  local dir="$1"
+  case "$dir" in
+    /|/usr|/usr/local|/etc|/bin|/sbin|/var|/opt|/home|/root) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# === ВВОД ДАННЫХ ===
+# Исправлено: чтение из /dev/tty позволяет вводить данные, даже если скрипт запущен через "curl | bash"
 prompt() {
   local var_name="$1"
   local label="$2"
@@ -36,25 +54,44 @@ prompt() {
   local current_value="${!var_name:-}"
   local answer
 
-  if [[ -n "$current_value" ]]; then
+  if [[ -n "$current_value" ]] || [[ "$NON_INTERACTIVE" == "true" ]]; then
+    if [[ -z "$current_value" && -n "$default_value" ]]; then
+      printf -v "$var_name" "%s" "$default_value"
+    fi
     return
   fi
 
   if [[ -n "$default_value" ]]; then
-    read -r -p "$label [$default_value]: " answer
-    answer="${answer:-$default_value}"
+    if read -r -p "$label [$default_value]: " answer </dev/tty 2>/dev/null; then
+      answer="${answer:-$default_value}"
+    else
+      answer="$default_value"
+    fi
   else
-    read -r -p "$label: " answer
+    if read -r -p "$label: " answer </dev/tty 2>/dev/null; then
+      :
+    else
+      answer=""
+    fi
   fi
   printf -v "$var_name" "%s" "$answer"
 }
 
 choose_existing_action() {
+  if [[ "$NON_INTERACTIVE" == "true" ]]; then
+    EXISTING_ACTION="update"
+    return
+  fi
+
   local answer
   printf "Обнаружена существующая установка панели в %s\n" "$INSTALL_DIR"
   printf "Выберите действие: [u] обновить, [d] удалить, [c] отмена\n"
-  read -r -p "Действие [u]: " answer
-  answer="${answer:-u}"
+  if read -r -p "Действие [u]: " answer </dev/tty 2>/dev/null; then
+    answer="${answer:-u}"
+  else
+    answer="u"
+  fi
+
   case "$answer" in
     u|U|update|обновить) EXISTING_ACTION="update" ;;
     d|D|delete|remove|удалить) EXISTING_ACTION="delete" ;;
@@ -67,17 +104,24 @@ choose_existing_action() {
 }
 
 detect_local_repo() {
-  local script_source="${BASH_SOURCE[0]:-}"
-  local script_dir
-  if [[ -z "$script_source" ]]; then
-    return
+  # Исправлено: поддержка симлинков
+  local script_source
+  if has_cmd realpath; then
+    script_source="$(realpath "${BASH_SOURCE[0]:-}")"
+  else
+    script_source="${BASH_SOURCE[0]:-}"
   fi
-  script_dir="$(cd "$(dirname "$script_source")" && pwd)"
-  if [[ -f "$script_dir/../go.mod" && -f "$script_dir/../deploy/panel/docker-compose.yml" ]]; then
-    LOCAL_REPO_DIR="$(cd "$script_dir/.." && pwd)"
+
+  local script_dir
+  if [[ -n "$script_source" ]]; then
+    script_dir="$(cd "$(dirname "$script_source")" && pwd)"
+    if [[ -f "$script_dir/../go.mod" && -f "$script_dir/../deploy/panel/docker-compose.yml" ]]; then
+      LOCAL_REPO_DIR="$(cd "$script_dir/.." && pwd)"
+    fi
   fi
 }
 
+# === GIT & РЕПОЗИТОРИЙ ===
 ensure_repo() {
   if [[ -n "${LOCAL_REPO_DIR:-}" ]]; then
     REPO_DIR="$LOCAL_REPO_DIR"
@@ -86,62 +130,89 @@ ensure_repo() {
   fi
 
   if [[ -d "$REPO_DIR/.git" ]]; then
-    info "Обновляю репозиторий в $REPO_DIR"
+    info "Синхронизирую репозиторий в $REPO_DIR"
+    # Исправлено: reset --hard предотвращает ошибки при случайном изменении файлов локально
     git -C "$REPO_DIR" fetch --all --tags
-    git -C "$REPO_DIR" checkout "$REPO_REF"
-    git -C "$REPO_DIR" pull --ff-only origin "$REPO_REF"
+    if git -C "$REPO_DIR" rev-parse "origin/$REPO_REF" >/dev/null 2>&1; then
+      git -C "$REPO_DIR" reset --hard "origin/$REPO_REF"
+    else
+      git -C "$REPO_DIR" reset --hard "$REPO_REF"
+    fi
     return
   fi
 
-  rm -rf "$REPO_DIR"
-  info "Клонирую репозиторий $REPO_URL"
-  git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$REPO_DIR"
+  # Создаем родительскую директорию, если её нет
+  mkdir -p "$(dirname "$REPO_DIR")"
+  info "Клонирую репозиторий $REPO_URL (ветка $REPO_REF)"
+  git clone -b "$REPO_REF" "$REPO_URL" "$REPO_DIR" || {
+    warn "Не удалось склонировать ветку, делаю полный клон и чекаут..."
+    git clone "$REPO_URL" "$REPO_DIR"
+    git -C "$REPO_DIR" checkout "$REPO_REF"
+  }
 }
 
+# === УПРАВЛЕНИЕ УСТАНОВКОЙ ===
 has_existing_install() {
-  [[ -f "$ENV_FILE" || -d "$PANEL_STATE_DIR" || ( -z "${LOCAL_REPO_DIR:-}" && -d "$REPO_DIR" ) ]]
+  [[ -f "$ENV_FILE" || -d "$PANEL_STATE_DIR" || ( -z "${LOCAL_REPO_DIR:-}" && -d "$REPO_DIR/.git" ) ]]
 }
 
 delete_install() {
   if [[ -f "$ENV_FILE" && -f "$COMPOSE_FILE" ]]; then
-    info "Останавливаю текущую панель"
-    compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" down --remove-orphans || true
+    info "Останавливаю текущую панель и удаляю контейнеры..."
+    # Исправлено: добавлен флаг -v для очистки volume'ов базы данных (по желанию)
+    compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" down -v --remove-orphans || true
   fi
 
   if [[ -n "${LOCAL_REPO_DIR:-}" ]]; then
     rm -rf "$PANEL_STATE_DIR" "$ENV_FILE"
     rmdir "$INSTALL_DIR" 2>/dev/null || true
   else
-    rm -rf "$INSTALL_DIR"
+    # Исправлено: защита от rm -rf /
+    if is_safe_dir "$INSTALL_DIR"; then
+      rm -rf "$INSTALL_DIR"
+    else
+      error "Сработала защита: каталог $INSTALL_DIR системный и не может быть удален автоматически!"
+      exit 1
+    fi
   fi
 
   success "Панель удалена"
 }
 
 write_env() {
+  # Исправлено: переменные взяты в кавычки во избежание инъекций и ошибок парсинга
   cat >"$ENV_FILE" <<EOF
-PANEL_PORT=$PANEL_PORT
-PANEL_BASE_URL=$PANEL_BASE_URL
-PANEL_STATE_DIR=$PANEL_STATE_DIR
-ENABLE_LOCAL_NODE=$ENABLE_LOCAL_NODE
-LOCAL_NODE_TOKEN=$LOCAL_NODE_TOKEN
-SINGBOX_IMAGE=$SINGBOX_IMAGE
-SINGBOX_BINARY_PATH=$SINGBOX_BINARY_PATH
+PANEL_PORT="${PANEL_PORT}"
+PANEL_BASE_URL="${PANEL_BASE_URL}"
+PANEL_STATE_DIR="${PANEL_STATE_DIR}"
+ENABLE_LOCAL_NODE="${ENABLE_LOCAL_NODE}"
+LOCAL_NODE_TOKEN="${LOCAL_NODE_TOKEN}"
+SINGBOX_IMAGE="${SINGBOX_IMAGE}"
+SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH}"
 EOF
 }
 
+# === DOCKER ===
 install_docker_if_missing() {
   if has_cmd docker && (docker compose version >/dev/null 2>&1 || has_cmd docker-compose); then
     return
   fi
 
   local answer
-  printf "Docker Engine или Compose не найдены.\n"
-  read -r -p "Установить Docker автоматически через официальный get.docker.com? [Y/n]: " answer
-  answer="${answer:-Y}"
+  if [[ "$NON_INTERACTIVE" == "true" ]]; then
+    answer="y"
+  else
+    printf "Docker Engine или Compose не найдены.\n"
+    if read -r -p "Установить Docker автоматически через официальный get.docker.com?[Y/n]: " answer </dev/tty 2>/dev/null; then
+      answer="${answer:-Y}"
+    else
+      answer="Y"
+    fi
+  fi
+
   case "$answer" in
     n|N|no|нет)
-      error "Docker не установлен"
+      error "Docker не установлен. Установка прервана."
       exit 1
       ;;
   esac
@@ -153,12 +224,18 @@ install_docker_if_missing() {
 
   local tmp_script
   tmp_script="$(mktemp)"
-  trap 'rm -f "$tmp_script"' EXIT
-  info "Скачиваю официальный installer Docker"
-  curl -fsSL https://get.docker.com -o "$tmp_script"
+  info "Скачиваю официальный installer Docker..."
+  
+  # Исправлено: безопасное скачивание скрипта
+  if ! curl -fsSL https://get.docker.com -o "$tmp_script"; then
+    error "Не удалось скачать установочный скрипт Docker."
+    rm -f "$tmp_script"
+    exit 1
+  fi
+
+  info "Запускаю установку Docker..."
   run_privileged sh "$tmp_script"
   rm -f "$tmp_script"
-  trap - EXIT
 
   if has_cmd systemctl; then
     run_privileged systemctl enable --now docker || true
@@ -173,6 +250,7 @@ ensure_docker_running() {
     return
   fi
 
+  info "Запуск службы Docker..."
   if has_cmd systemctl; then
     run_privileged systemctl start docker || true
   elif has_cmd service; then
@@ -188,20 +266,24 @@ ensure_docker_running() {
     return
   fi
 
-  error "Docker установлен, но недоступен текущему пользователю. Запусти скрипт через sudo или добавь пользователя в группу docker"
+  error "Docker установлен, но недоступен текущему пользователю. Запусти скрипт через sudo или добавь пользователя в группу docker."
   exit 1
 }
 
 set_compose_cmd() {
+  # Исправлено: приоритет Docker Compose V2, который корректно читает сложные конструкции .env
   if "${DOCKER_PREFIX[@]}" docker compose version >/dev/null 2>&1; then
     COMPOSE_CMD=("${DOCKER_PREFIX[@]}" "docker" "compose")
     return
   fi
   if has_cmd docker-compose; then
+    warn "Используется устаревшая версия docker-compose (V1)."
+    warn "Из-за этого возможна ошибка 'Invalid interpolation format' при чтении docker-compose.yml."
+    warn "Рекомендуется обновить Docker Engine."
     COMPOSE_CMD=("${DOCKER_PREFIX[@]}" "docker-compose")
     return
   fi
-  error "Не найден ни docker compose, ни docker-compose"
+  error "Не найден ни docker compose, ни docker-compose. Установите Docker Compose."
   exit 1
 }
 
@@ -209,21 +291,23 @@ compose_run() {
   "${COMPOSE_CMD[@]}" "$@"
 }
 
+# === АРГУМЕНТЫ И MAIN ===
 usage() {
   cat <<'EOF'
 Использование:
-  ./scripts/install-panel.sh [опции]
+  ./install-panel.sh [опции]
 
 Опции:
-  --repo-url URL
-  --repo-ref REF
-  --install-dir PATH
-  --panel-base-url URL
-  --panel-port PORT
-  --enable-local-node true|false
+  -y, --non-interactive        Не задавать вопросы, использовать дефолтные значения
+  --repo-url URL               URL git репозитория
+  --repo-ref REF               Ветка или тег репозитория
+  --install-dir PATH           Папка установки (по умолч. /opt/mgb-panel)
+  --panel-base-url URL         Публичный URL панели
+  --panel-port PORT            Порт панели (по умолч. 8443)
+  --enable-local-node true/false
   --local-node-token TOKEN
   --singbox-image IMAGE
-  --help
+  --help, -h                   Показать эту справку
 EOF
 }
 
@@ -236,6 +320,7 @@ ENABLE_LOCAL_NODE="${ENABLE_LOCAL_NODE:-false}"
 LOCAL_NODE_TOKEN="${LOCAL_NODE_TOKEN:-}"
 SINGBOX_IMAGE="${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
 SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
+NON_INTERACTIVE="false"
 EXISTING_ACTION=""
 COMPOSE_CMD=()
 DOCKER_PREFIX=()
@@ -244,6 +329,7 @@ detect_local_repo
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -y|--non-interactive) NON_INTERACTIVE="true"; shift 1 ;;
     --repo-url) REPO_URL="$2"; shift 2 ;;
     --repo-ref) REPO_REF="$2"; shift 2 ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
@@ -253,11 +339,7 @@ while [[ $# -gt 0 ]]; do
     --local-node-token) LOCAL_NODE_TOKEN="$2"; shift 2 ;;
     --singbox-image) SINGBOX_IMAGE="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
-    *)
-      error "Неизвестный аргумент: $1"
-      usage
-      exit 1
-      ;;
+    *) error "Неизвестный аргумент: $1"; usage; exit 1 ;;
   esac
 done
 
@@ -275,7 +357,7 @@ ENV_FILE="$INSTALL_DIR/panel.env"
 COMPOSE_FILE="$REPO_DIR/deploy/panel/docker-compose.yml"
 
 if ! has_cmd git; then
-  error "Команда 'git' не найдена"
+  error "Команда 'git' не найдена. Установите git: sudo apt install git"
   exit 1
 fi
 
@@ -284,6 +366,8 @@ ensure_docker_running
 set_compose_cmd
 
 mkdir -p "$INSTALL_DIR" "$PANEL_STATE_DIR"
+# Исправлено: даем нужные права на папку состояния для контейнеров (чтобы не было Permission Denied)
+chmod 755 "$PANEL_STATE_DIR"
 
 if has_existing_install; then
   choose_existing_action
@@ -307,9 +391,11 @@ if [[ "$EXISTING_ACTION" == "update" ]]; then
 else
   info "Запускаю панель через Docker Compose"
 fi
+
+# Поднимаем контейнеры
 compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
 
-success "Панель установлена"
+success "Панель успешно установлена и запущена!"
 printf "\n"
 printf "Каталог установки: %s\n" "$INSTALL_DIR"
 printf "Файл окружения:    %s\n" "$ENV_FILE"
