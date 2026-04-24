@@ -575,8 +575,8 @@
         </div>
         <div class="small">CA endpoint</div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
-          <span class="mono" style="font-size:11px;flex:1;overflow-wrap:anywhere;">{{ .BaseURL }}/api/pki/ca</span>
-          <button type="button" class="copy-btn" data-copy="{{ .BaseURL }}/api/pki/ca">Копировать</button>
+          <span class="mono" style="font-size:11px;flex:1;overflow-wrap:anywhere;">{{ .EffectiveBaseURL }}/api/pki/ca</span>
+          <button type="button" class="copy-btn" data-copy="{{ .EffectiveBaseURL }}/api/pki/ca">Копировать</button>
         </div>
       </section>
     </aside>
@@ -739,7 +739,7 @@
               <h2>Локальный узел</h2>
               <span class="pill status-{{ .LocalNode.Status }}">{{ statusLabel .LocalNode.Status }}</span>
             </div>
-            <p class="small" style="margin:0 0 14px;">sing-box запущен в том же процессе что и панель. Управляется автоматически.</p>
+            <p class="small" style="margin:0 0 14px;">Локальный узел работает отдельным Docker-сервисом <span class="mono">local-node</span> с host network и NET_ADMIN. Панель только выдаёт bootstrap-запись и конфигурации.</p>
             <div class="list" style="gap:8px;">
               <div class="list" style="display:grid;gap:6px;padding:0;list-style:none;">
                 <div style="display:flex;justify-content:space-between;font-size:13px;">
@@ -757,15 +757,15 @@
             <div class="small" style="margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(255,124,143,0.08);border:1px solid rgba(255,124,143,0.2);color:var(--danger);">{{ .LocalNode.LastApplyError }}</div>
             {{ end }}
             <form method="post" action="/admin/nodes/enable-local" style="margin-top:14px;">
-              <button type="submit" style="background:rgba(108,166,255,0.14);color:var(--accent-2);border:1px solid rgba(108,166,255,0.28);">Переподключить агента</button>
+              <button type="submit" style="background:rgba(108,166,255,0.14);color:var(--accent-2);border:1px solid rgba(108,166,255,0.28);">Перевыпустить bootstrap для local-node</button>
             </form>
             {{ else }}
             <div class="section-title">
               <h2>sing-box на этом сервере</h2>
             </div>
-            <p class="small" style="margin:0 0 14px;">Запустить sing-box прямо в процессе панели — без отдельного сервера. Идеально когда панель и первый узел на одной машине.</p>
+            <p class="small" style="margin:0 0 14px;">Нажмите кнопку — панель создаст local-node запись и выдаст bootstrap-token в shared state. Контейнер <span class="mono">local-node</span> сам enrolится и применит sing-box.</p>
             <form method="post" action="/admin/nodes/enable-local">
-              <button type="submit">Запустить локальный узел</button>
+              <button type="submit">Включить локальный узел</button>
             </form>
             {{ end }}
           </article>
@@ -782,14 +782,18 @@
           </div>
           <div class="table-wrap">
             <table>
-              <tr><th>Имя</th><th>Email</th><th>Ключ доступа</th><th>Создан</th></tr>
+              <tr><th>Имя</th><th>Контакты</th><th>Заметка</th><th>Ключ доступа</th><th>Создан</th></tr>
               {{ range .Dashboard.Users }}
               <tr>
                 <td>
                   <div>{{ .Name }}</div>
                   <div class="mono">{{ .ID }}</div>
                 </td>
-                <td>{{ .Email }}</td>
+                <td>
+                  <div>{{ .Email }}</div>
+                  {{ if .Telegram }}<div class="small" style="margin-top:4px;">TG: {{ .Telegram }}</div>{{ end }}
+                </td>
+                <td>{{ if .Note }}{{ .Note }}{{ else }}<span class="small">—</span>{{ end }}</td>
                 <td>
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                     <span class="mono mono-trunc" title="{{ .AccessKey }}">{{ .AccessKey }}</span>
@@ -799,7 +803,7 @@
                 <td>{{ formatDateTime .CreatedAt }}</td>
               </tr>
               {{ else }}
-              <tr><td colspan="4">Пользователей пока нет.</td></tr>
+              <tr><td colspan="5">Пользователей пока нет.</td></tr>
               {{ end }}
             </table>
           </div>
@@ -819,6 +823,14 @@
             <div class="field">
               <label for="user-email">Email</label>
               <input id="user-email" name="email" type="email" placeholder="ivan@example.com" required>
+            </div>
+            <div class="field">
+              <label for="user-telegram">Telegram</label>
+              <input id="user-telegram" name="telegram" placeholder="@username или ID">
+            </div>
+            <div class="field">
+              <label for="user-note">Заметка</label>
+              <input id="user-note" name="note" placeholder="доп. информация">
             </div>
             <button type="submit">Создать пользователя</button>
           </form>
@@ -851,7 +863,7 @@
                   <div class="inline-links">
                     <a class="endpoint" href="/portal/{{ .Token }}">Портал</a>
                     <a class="endpoint" href="/subscription/{{ .Token }}">Feed</a>
-                    <button type="button" class="copy-btn" data-copy="{{ $.BaseURL }}/subscription/{{ .Token }}">Скопировать feed</button>
+                    <button type="button" class="copy-btn" data-copy="{{ $.EffectiveBaseURL }}/subscription/{{ .Token }}">Скопировать подписку</button>
                   </div>
                   <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
                     <span class="mono mono-trunc" title="{{ .Token }}">{{ .Token }}</span>
@@ -921,10 +933,12 @@
                   <div>{{ tlsModeLabel .TLSMode }}</div>
                   {{ if .ServerName }}<div class="small" style="margin-top:8px;">SNI: {{ .ServerName }}</div>{{ end }}
                   {{ if .RealityPubKey }}<div class="mono" style="margin-top:8px;">pbk: {{ .RealityPubKey }}</div>{{ end }}
+                  {{ if .TLSCertPath }}<div class="mono" style="margin-top:8px;">cert: {{ .TLSCertPath }}</div>{{ end }}
                 </td>
                 <td>
                   <div>{{ .PublicHost }}</div>
                   {{ if .RealityShort }}<div class="small" style="margin-top:8px;">short id: {{ .RealityShort }}</div>{{ end }}
+                  {{ if .ShadowsocksMethod }}<div class="small" style="margin-top:8px;">method: {{ .ShadowsocksMethod }}</div>{{ end }}
                 </td>
               </tr>
               {{ else }}
@@ -958,8 +972,9 @@
               </div>
               <p class="form-section-label">Сеть</p>
               <div class="field">
-                <label for="inbound-host">Адрес прослушивания</label>
+                <label for="inbound-host">Bind address</label>
                 <input id="inbound-host" name="listen_host" value="::">
+                <span class="small">Это локальный адрес прослушивания на узле. Для клиентов используется публичный хост ниже.</span>
               </div>
               <div class="field">
                 <label for="inbound-port">Порт</label>
@@ -970,19 +985,19 @@
                 <label for="inbound-transport">Транспорт</label>
                 <select id="inbound-transport" name="transport">
                   <option value="">Без транспорта</option>
-                  <option value="tcp">TCP</option>
-                  <option value="ws">WebSocket</option>
-                  <option value="grpc">gRPC</option>
-                  <option value="httpupgrade">HTTPUpgrade</option>
-                  <option value="quic">QUIC</option>
+                  <option value="ws" data-protocols="vless,trojan">WebSocket</option>
+                  <option value="grpc" data-protocols="vless,trojan">gRPC</option>
+                  <option value="httpupgrade" data-protocols="vless,trojan">HTTPUpgrade</option>
+                  <option value="http" data-protocols="vless,trojan">HTTP</option>
+                  <option value="quic" data-protocols="vless,trojan">QUIC</option>
                 </select>
               </div>
               <div class="field">
                 <label for="inbound-tls">Режим TLS</label>
                 <select id="inbound-tls" name="tls_mode">
-                  <option value="">Без TLS</option>
-                  <option value="tls">TLS</option>
-                  <option value="reality">REALITY</option>
+                  <option value="" data-protocols="vless,shadowsocks">Без TLS</option>
+                  <option value="tls" data-protocols="vless,trojan,hysteria2">TLS</option>
+                  <option value="reality" data-protocols="vless,trojan">REALITY</option>
                 </select>
               </div>
               <div class="field" data-toggle="transport=ws,grpc,httpupgrade">
@@ -997,6 +1012,7 @@
               <div class="field">
                 <label for="inbound-public-host">Публичный хост</label>
                 <input id="inbound-public-host" name="public_host" placeholder="vpn.example.com">
+                <span class="small">Если пусто, в подписке будет использован адрес ноды.</span>
               </div>
               <p class="form-section-label">Безопасность</p>
               <div class="field">
@@ -1006,9 +1022,33 @@
                   <button type="button" class="input-action" onclick="togglePassword('inbound-password', this)">Показать</button>
                 </div>
               </div>
+              <div class="field" data-toggle="protocol=shadowsocks">
+                <label for="inbound-ss-method">Shadowsocks method</label>
+                <input id="inbound-ss-method" name="shadowsocks_method" value="chacha20-ietf-poly1305">
+              </div>
+              <div class="field" data-toggle="tls_mode=tls">
+                <label for="inbound-tls-cert">TLS certificate path</label>
+                <input id="inbound-tls-cert" name="tls_cert_path" placeholder="/etc/ssl/private/fullchain.pem">
+              </div>
+              <div class="field" data-toggle="tls_mode=tls">
+                <label for="inbound-tls-key">TLS key path</label>
+                <input id="inbound-tls-key" name="tls_key_path" placeholder="/etc/ssl/private/privkey.pem">
+              </div>
               <div class="field" data-toggle="tls_mode=reality">
                 <label for="inbound-reality-pub">REALITY public key</label>
                 <input id="inbound-reality-pub" name="reality_public_key" placeholder="public key">
+              </div>
+              <div class="field" data-toggle="tls_mode=reality">
+                <label for="inbound-reality-private">REALITY private key</label>
+                <input id="inbound-reality-private" name="reality_private_key" type="password" placeholder="private key">
+              </div>
+              <div class="field" data-toggle="tls_mode=reality">
+                <label for="inbound-reality-handshake-server">REALITY handshake server</label>
+                <input id="inbound-reality-handshake-server" name="reality_handshake_server" placeholder="www.cloudflare.com">
+              </div>
+              <div class="field" data-toggle="tls_mode=reality">
+                <label for="inbound-reality-handshake-port">REALITY handshake port</label>
+                <input id="inbound-reality-handshake-port" name="reality_handshake_port" type="number" min="1" max="65535" value="443">
               </div>
               <div class="field" data-toggle="tls_mode=reality">
                 <label for="inbound-reality-short">REALITY short id</label>
@@ -1258,6 +1298,23 @@
       if (!groups.length) return;
 
       function refresh() {
+        var protocolControl = document.querySelector('[name="protocol"]');
+        var protocol = protocolControl ? protocolControl.value : "";
+
+        document.querySelectorAll("option[data-protocols]").forEach(function (option) {
+          var allowed = (option.getAttribute("data-protocols") || "").split(",");
+          var visible = allowed.indexOf(protocol) !== -1;
+          option.disabled = !visible;
+          option.hidden = !visible;
+        });
+
+        ["transport", "tls_mode"].forEach(function (name) {
+          var select = document.querySelector('[name="' + name + '"]');
+          if (!select || !select.selectedOptions.length || !select.selectedOptions[0].disabled) return;
+          var firstEnabled = Array.prototype.find.call(select.options, function (option) { return !option.disabled; });
+          if (firstEnabled) select.value = firstEnabled.value;
+        });
+
         groups.forEach(function (group) {
           var rule = group.dataset.toggle || "";
           var parts = rule.split("=");

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"mgb-panel/internal/inboundrules"
 	"mgb-panel/internal/model"
 )
 
@@ -29,40 +30,41 @@ func CompileNodeConfig(node model.Node, inbounds []model.InboundProfile, links [
 
 	configInbounds := make([]map[string]any, 0, len(inbounds))
 	for _, inbound := range inbounds {
+		profile, err := inboundrules.Normalize(inbound)
+		if err != nil {
+			return nil, fmt.Errorf("inbound %s: %w", defaultString(inbound.Name, inbound.ID), err)
+		}
+		if len(users) == 0 {
+			continue
+		}
+
 		usersBlock := make([]map[string]any, 0, len(users))
 		for _, user := range users {
-			switch strings.ToLower(inbound.Protocol) {
+			switch profile.Protocol {
 			case "vless":
-				usersBlock = append(usersBlock, map[string]any{"uuid": user.AccessKey, "flow": ""})
-			case "trojan", "hysteria2", "shadowsocks":
-				usersBlock = append(usersBlock, map[string]any{"name": user.Name, "password": inbound.Password})
+				usersBlock = append(usersBlock, map[string]any{"name": user.Name, "uuid": user.AccessKey, "flow": ""})
+			case "trojan", "hysteria2":
+				usersBlock = append(usersBlock, map[string]any{"name": user.Name, "password": profile.Password})
 			}
 		}
 
 		item := map[string]any{
-			"type":        inbound.Protocol,
-			"tag":         inbound.ID,
-			"listen":      defaultString(inbound.ListenHost, "::"),
-			"listen_port": inbound.ListenPort,
+			"type":        profile.Protocol,
+			"tag":         profile.ID,
+			"listen":      defaultString(profile.ListenHost, "::"),
+			"listen_port": profile.ListenPort,
 		}
 		if len(usersBlock) > 0 {
 			item["users"] = usersBlock
 		}
-		if inbound.Transport != "" {
-			item["transport"] = map[string]any{"type": inbound.Transport, "path": inbound.Path}
+		if profile.Protocol == "shadowsocks" {
+			item["method"] = profile.ShadowsocksMethod
+			item["password"] = profile.Password
 		}
-		if inbound.TLSMode != "" {
-			tlsBlock := map[string]any{
-				"enabled":     true,
-				"server_name": inbound.ServerName,
-			}
-			if strings.EqualFold(inbound.TLSMode, "reality") {
-				tlsBlock["reality"] = map[string]any{
-					"enabled":    true,
-					"public_key": inbound.RealityPubKey,
-					"short_id":   inbound.RealityShort,
-				}
-			}
+		if transport := inboundrules.BuildTransport(profile); transport != nil {
+			item["transport"] = transport
+		}
+		if tlsBlock := inboundrules.BuildTLS(profile); tlsBlock != nil {
 			item["tls"] = tlsBlock
 		}
 		configInbounds = append(configInbounds, item)

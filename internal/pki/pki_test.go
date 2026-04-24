@@ -3,9 +3,11 @@ package pki
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -42,4 +44,26 @@ func TestLoadOrCreateAndSignNodeCSR(t *testing.T) {
 	if _, err := os.Stat(dir + "/panel.pem"); err != nil {
 		t.Fatalf("panel certificate not persisted: %v", err)
 	}
+}
+
+func TestLoadOrCreateAddsIPSANForPanelHost(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := LoadOrCreate(dir, "203.0.113.10"); err != nil {
+		t.Fatalf("LoadOrCreate: %v", err)
+	}
+	cert, err := tls.LoadX509KeyPair(dir+"/panel.pem", dir+"/panel-key.pem")
+	if err != nil {
+		t.Fatalf("LoadX509KeyPair: %v", err)
+	}
+	parsed, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	want := net.ParseIP("203.0.113.10")
+	for _, ip := range parsed.IPAddresses {
+		if ip.Equal(want) {
+			return
+		}
+	}
+	t.Fatalf("panel certificate missing IP SAN %s: %v", want, parsed.IPAddresses)
 }

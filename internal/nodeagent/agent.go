@@ -26,13 +26,14 @@ import (
 )
 
 type Config struct {
-	PanelURL         string
-	StateDir         string
-	BootstrapToken   string
-	PanelCAFile      string
-	PanelFingerprint string
-	SingboxBinary    string
-	PollInterval     time.Duration
+	PanelURL           string
+	StateDir           string
+	BootstrapToken     string
+	BootstrapTokenFile string
+	PanelCAFile        string
+	PanelFingerprint   string
+	SingboxBinary      string
+	PollInterval       time.Duration
 }
 
 type Agent struct {
@@ -205,6 +206,10 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 	if fileExists(certPath) && fileExists(keyPath) {
 		return nil
 	}
+	bootstrapToken, err := a.bootstrapToken(ctx)
+	if err != nil {
+		return err
+	}
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -228,7 +233,7 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 		return err
 	}
 	body, _ := json.Marshal(map[string]any{
-		"bootstrap_token": a.cfg.BootstrapToken,
+		"bootstrap_token": bootstrapToken,
 		"csr":             string(csrPEM),
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.PanelURL+"/api/node/enroll", bytes.NewReader(body))
@@ -269,12 +274,25 @@ func (a *Agent) ensureEnrolled(ctx context.Context) error {
 }
 
 func (a *Agent) bootstrapCA(ctx context.Context) error {
-	if a.cfg.PanelCAFile != "" && fileExists(a.cfg.PanelCAFile) {
-		data, err := os.ReadFile(a.cfg.PanelCAFile)
-		if err != nil {
-			return err
+	if a.cfg.PanelCAFile != "" {
+		for {
+			if fileExists(a.cfg.PanelCAFile) {
+				data, err := os.ReadFile(a.cfg.PanelCAFile)
+				if err != nil {
+					return err
+				}
+				return os.WriteFile(a.caPath(), data, 0o644)
+			}
+			if a.cfg.PanelFingerprint != "" {
+				break
+			}
+			a.logger.Printf("waiting for panel CA file %s", a.cfg.PanelCAFile)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
 		}
-		return os.WriteFile(a.caPath(), data, 0o644)
 	}
 	if fileExists(a.caPath()) {
 		return nil
@@ -315,6 +333,31 @@ func (a *Agent) bootstrapCA(ctx context.Context) error {
 		return fmt.Errorf("panel CA fingerprint mismatch")
 	}
 	return os.WriteFile(a.caPath(), data, 0o644)
+}
+
+func (a *Agent) bootstrapToken(ctx context.Context) (string, error) {
+	if token := strings.TrimSpace(a.cfg.BootstrapToken); token != "" {
+		return token, nil
+	}
+	if a.cfg.BootstrapTokenFile == "" {
+		return "", fmt.Errorf("bootstrap token or bootstrap token file is required")
+	}
+	for {
+		data, err := os.ReadFile(a.cfg.BootstrapTokenFile)
+		if err == nil {
+			if token := strings.TrimSpace(string(data)); token != "" {
+				return token, nil
+			}
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("read bootstrap token file: %w", err)
+		}
+		a.logger.Printf("waiting for bootstrap token file %s", a.cfg.BootstrapTokenFile)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func (a *Agent) bootstrapClient() (*http.Client, error) {

@@ -32,8 +32,10 @@ type CreateNodeParams struct {
 }
 
 type CreateUserParams struct {
-	Name  string
-	Email string
+	Name     string
+	Email    string
+	Telegram string
+	Note     string
 }
 
 type CreateSubscriptionParams struct {
@@ -43,19 +45,25 @@ type CreateSubscriptionParams struct {
 }
 
 type CreateInboundProfileParams struct {
-	Name          string
-	Protocol      string
-	ListenHost    string
-	ListenPort    int
-	Transport     string
-	ServerName    string
-	PublicHost    string
-	Path          string
-	Password      string
-	RealityPubKey string
-	RealityShort  string
-	TLSMode       string
-	Metadata      map[string]string
+	Name                   string
+	Protocol               string
+	ListenHost             string
+	ListenPort             int
+	Transport              string
+	ServerName             string
+	PublicHost             string
+	Path                   string
+	Password               string
+	RealityPubKey          string
+	RealityPrivateKey     string
+	RealityHandshakeServer string
+	RealityHandshakePort   int
+	RealityShort           string
+	TLSMode                string
+	TLSCertPath            string
+	TLSKeyPath             string
+	ShadowsocksMethod      string
+	Metadata               map[string]string
 }
 
 type CreateTopologyLinkParams struct {
@@ -114,6 +122,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			email TEXT NOT NULL,
+			telegram TEXT NOT NULL DEFAULT '',
+			note TEXT NOT NULL DEFAULT '',
 			access_key TEXT NOT NULL,
 			created_at TIMESTAMP NOT NULL,
 			modified_at TIMESTAMP NOT NULL
@@ -184,8 +194,14 @@ func (s *Store) migrate(ctx context.Context) error {
 			path TEXT NOT NULL,
 			password TEXT NOT NULL,
 			reality_public_key TEXT NOT NULL,
+			reality_private_key TEXT NOT NULL DEFAULT '',
+			reality_handshake_server TEXT NOT NULL DEFAULT '',
+			reality_handshake_port INTEGER NOT NULL DEFAULT 443,
 			reality_short_id TEXT NOT NULL,
 			tls_mode TEXT NOT NULL,
+			tls_cert_path TEXT NOT NULL DEFAULT '',
+			tls_key_path TEXT NOT NULL DEFAULT '',
+			shadowsocks_method TEXT NOT NULL DEFAULT '',
 			metadata_json TEXT NOT NULL DEFAULT '{}',
 			created_at TIMESTAMP NOT NULL,
 			modified_at TIMESTAMP NOT NULL
@@ -247,6 +263,27 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	if err := s.ensureColumn(ctx, "nodes", "last_seen_ip", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
+	}
+	if err := s.ensureColumn(ctx, "users", "telegram", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "users", "note", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{"reality_private_key", "TEXT NOT NULL DEFAULT ''"},
+		{"reality_handshake_server", "TEXT NOT NULL DEFAULT ''"},
+		{"reality_handshake_port", "INTEGER NOT NULL DEFAULT 443"},
+		{"tls_cert_path", "TEXT NOT NULL DEFAULT ''"},
+		{"tls_key_path", "TEXT NOT NULL DEFAULT ''"},
+		{"shadowsocks_method", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.ensureColumn(ctx, "inbound_profiles", column.name, column.ddl); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -421,12 +458,39 @@ func (s *Store) EnrollNodeByToken(ctx context.Context, token string) (model.Node
 }
 
 // IssueEnrollToken generates a new unused enroll token for the given node.
-// Call this before (re)starting a local agent so a fresh token is always available.
 func (s *Store) IssueEnrollToken(ctx context.Context, nodeID string) (string, error) {
 	token, err := secret.Hex(24)
 	if err != nil {
 		return "", err
 	}
+	return s.IssueEnrollTokenValue(ctx, nodeID, token)
+}
+
+func (s *Store) IssueEnrollTokenValue(ctx context.Context, nodeID, token string) (string, error) {
+	if token == "" {
+		generated, err := secret.Hex(24)
+		if err != nil {
+			return "", err
+		}
+		token = generated
+	}
+
+	var existingNodeID string
+	err := s.db.QueryRowContext(ctx, `SELECT node_id FROM node_enroll_tokens WHERE token = ?`, token).Scan(&existingNodeID)
+	switch {
+	case err == nil:
+		if existingNodeID != nodeID {
+			return "", fmt.Errorf("enroll token already belongs to another node")
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE node_enroll_tokens SET used_at = NULL WHERE token = ?`, token); err != nil {
+			return "", fmt.Errorf("reset enroll token: %w", err)
+		}
+		return token, nil
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return "", fmt.Errorf("find enroll token: %w", err)
+	}
+
 	tokenID, err := secret.ID("enroll")
 	if err != nil {
 		return "", err
@@ -439,6 +503,42 @@ func (s *Store) IssueEnrollToken(ctx context.Context, nodeID string) (string, er
 		return "", fmt.Errorf("insert enroll token: %w", err)
 	}
 	return token, nil
+}
+
+func (s *Store) EnsureLocalNode(ctx context.Context, token string) (model.Node, error) {
+	nodes, err := s.ListNodes(ctx)
+	if err != nil {
+		return model.Node{}, err
+	}
+	for _, node := range nodes {
+		if !node.IsLocal {
+			continue
+		}
+		if token != "" {
+			if _, err := s.IssueEnrollTokenValue(ctx, node.ID, token); err != nil {
+				return model.Node{}, err
+			}
+			node.EnrollToken = token
+		}
+		return node, nil
+	}
+
+	node, err := s.CreateNode(ctx, CreateNodeParams{
+		Name:    "local-panel",
+		Address: "127.0.0.1",
+		Role:    "edge",
+		IsLocal: true,
+	})
+	if err != nil {
+		return model.Node{}, err
+	}
+	if token != "" {
+		if _, err := s.IssueEnrollTokenValue(ctx, node.ID, token); err != nil {
+			return model.Node{}, err
+		}
+		node.EnrollToken = token
+	}
+	return node, nil
 }
 
 func (s *Store) SaveNodeCertificate(ctx context.Context, nodeID, serial, certPEM string, notAfter time.Time) error {
@@ -598,10 +698,12 @@ func (s *Store) CreateUser(ctx context.Context, params CreateUserParams) (model.
 	now := time.Now().UTC()
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO users(id, name, email, access_key, created_at, modified_at) VALUES(?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO users(id, name, email, telegram, note, access_key, created_at, modified_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
 		params.Name,
 		params.Email,
+		params.Telegram,
+		params.Note,
 		accessKey,
 		now,
 		now,
@@ -610,11 +712,11 @@ func (s *Store) CreateUser(ctx context.Context, params CreateUserParams) (model.
 		return model.User{}, fmt.Errorf("insert user: %w", err)
 	}
 	_ = s.Audit(ctx, "admin", "create", "user", id, params.Email)
-	return model.User{ID: id, Name: params.Name, Email: params.Email, AccessKey: accessKey, CreatedAt: now, ModifiedAt: now}, nil
+	return model.User{ID: id, Name: params.Name, Email: params.Email, Telegram: params.Telegram, Note: params.Note, AccessKey: accessKey, CreatedAt: now, ModifiedAt: now}, nil
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]model.User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, email, access_key, created_at, modified_at FROM users ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, email, telegram, note, access_key, created_at, modified_at FROM users ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -623,7 +725,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]model.User, error) {
 	var out []model.User
 	for rows.Next() {
 		var user model.User
-		if err := rows.Scan(&user.ID, &user.Name, &user.Email, &user.AccessKey, &user.CreatedAt, &user.ModifiedAt); err != nil {
+		if err := rows.Scan(&user.ID, &user.Name, &user.Email, &user.Telegram, &user.Note, &user.AccessKey, &user.CreatedAt, &user.ModifiedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		out = append(out, user)
@@ -704,8 +806,8 @@ func (s *Store) CreateInboundProfile(ctx context.Context, params CreateInboundPr
 	now := time.Now().UTC()
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO inbound_profiles(id, name, protocol, listen_host, listen_port, transport, server_name, public_host, path, password, reality_public_key, reality_short_id, tls_mode, metadata_json, created_at, modified_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO inbound_profiles(id, name, protocol, listen_host, listen_port, transport, server_name, public_host, path, password, reality_public_key, reality_private_key, reality_handshake_server, reality_handshake_port, reality_short_id, tls_mode, tls_cert_path, tls_key_path, shadowsocks_method, metadata_json, created_at, modified_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
 		params.Name,
 		params.Protocol,
@@ -717,8 +819,14 @@ func (s *Store) CreateInboundProfile(ctx context.Context, params CreateInboundPr
 		params.Path,
 		params.Password,
 		params.RealityPubKey,
+		params.RealityPrivateKey,
+		params.RealityHandshakeServer,
+		params.RealityHandshakePort,
 		params.RealityShort,
 		params.TLSMode,
+		params.TLSCertPath,
+		params.TLSKeyPath,
+		params.ShadowsocksMethod,
 		string(metadata),
 		now,
 		now,
@@ -728,27 +836,33 @@ func (s *Store) CreateInboundProfile(ctx context.Context, params CreateInboundPr
 	}
 	_ = s.Audit(ctx, "admin", "create", "inbound_profile", id, params.Name)
 	return model.InboundProfile{
-		ID:            id,
-		Name:          params.Name,
-		Protocol:      params.Protocol,
-		ListenHost:    params.ListenHost,
-		ListenPort:    params.ListenPort,
-		Transport:     params.Transport,
-		ServerName:    params.ServerName,
-		PublicHost:    params.PublicHost,
-		Path:          params.Path,
-		Password:      params.Password,
-		RealityPubKey: params.RealityPubKey,
-		RealityShort:  params.RealityShort,
-		TLSMode:       params.TLSMode,
-		Metadata:      params.Metadata,
-		CreatedAt:     now,
-		ModifiedAt:    now,
+		ID:                     id,
+		Name:                   params.Name,
+		Protocol:               params.Protocol,
+		ListenHost:             params.ListenHost,
+		ListenPort:             params.ListenPort,
+		Transport:              params.Transport,
+		ServerName:             params.ServerName,
+		PublicHost:             params.PublicHost,
+		Path:                   params.Path,
+		Password:               params.Password,
+		RealityPubKey:          params.RealityPubKey,
+		RealityPrivateKey:     params.RealityPrivateKey,
+		RealityHandshakeServer: params.RealityHandshakeServer,
+		RealityHandshakePort:   params.RealityHandshakePort,
+		RealityShort:           params.RealityShort,
+		TLSMode:                params.TLSMode,
+		TLSCertPath:            params.TLSCertPath,
+		TLSKeyPath:             params.TLSKeyPath,
+		ShadowsocksMethod:      params.ShadowsocksMethod,
+		Metadata:               params.Metadata,
+		CreatedAt:              now,
+		ModifiedAt:             now,
 	}, nil
 }
 
 func (s *Store) ListInboundProfiles(ctx context.Context) ([]model.InboundProfile, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, protocol, listen_host, listen_port, transport, server_name, public_host, path, password, reality_public_key, reality_short_id, tls_mode, metadata_json, created_at, modified_at FROM inbound_profiles ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, protocol, listen_host, listen_port, transport, server_name, public_host, path, password, reality_public_key, reality_private_key, reality_handshake_server, reality_handshake_port, reality_short_id, tls_mode, tls_cert_path, tls_key_path, shadowsocks_method, metadata_json, created_at, modified_at FROM inbound_profiles ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list inbound profiles: %w", err)
 	}
@@ -770,8 +884,14 @@ func (s *Store) ListInboundProfiles(ctx context.Context) ([]model.InboundProfile
 			&item.Path,
 			&item.Password,
 			&item.RealityPubKey,
+			&item.RealityPrivateKey,
+			&item.RealityHandshakeServer,
+			&item.RealityHandshakePort,
 			&item.RealityShort,
 			&item.TLSMode,
+			&item.TLSCertPath,
+			&item.TLSKeyPath,
+			&item.ShadowsocksMethod,
 			&metadataJSON,
 			&item.CreatedAt,
 			&item.ModifiedAt,
@@ -792,9 +912,12 @@ func (s *Store) CreateNodeInboundBinding(ctx context.Context, nodeID, inboundPro
 		return model.NodeInboundBinding{}, err
 	}
 	now := time.Now().UTC()
-	_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO node_inbound_bindings(id, node_id, inbound_profile_id, created_at) VALUES(?, ?, ?, ?)`, id, nodeID, inboundProfileID, now)
+	res, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO node_inbound_bindings(id, node_id, inbound_profile_id, created_at) VALUES(?, ?, ?, ?)`, id, nodeID, inboundProfileID, now)
 	if err != nil {
 		return model.NodeInboundBinding{}, fmt.Errorf("insert binding: %w", err)
+	}
+	if affected, err := res.RowsAffected(); err == nil && affected == 0 {
+		return model.NodeInboundBinding{}, fmt.Errorf("binding already exists")
 	}
 	_ = s.Audit(ctx, "admin", "bind", "node_inbound", nodeID, inboundProfileID)
 	return model.NodeInboundBinding{ID: id, NodeID: nodeID, InboundProfileID: inboundProfileID, CreatedAt: now}, nil
@@ -919,7 +1042,7 @@ func (s *Store) PortalDataByToken(ctx context.Context, token string) (PortalData
 	var portal PortalData
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT u.id, u.name, u.email, u.access_key, u.created_at, u.modified_at,
+		`SELECT u.id, u.name, u.email, u.telegram, u.note, u.access_key, u.created_at, u.modified_at,
 		        s.id, s.user_id, s.name, s.status, s.expires_at, t.token, s.created_at, s.modified_at
 		   FROM subscription_tokens t
 		   JOIN subscriptions s ON s.id = t.subscription_id
@@ -931,6 +1054,8 @@ func (s *Store) PortalDataByToken(ctx context.Context, token string) (PortalData
 		&portal.User.ID,
 		&portal.User.Name,
 		&portal.User.Email,
+		&portal.User.Telegram,
+		&portal.User.Note,
 		&portal.User.AccessKey,
 		&portal.User.CreatedAt,
 		&portal.User.ModifiedAt,
@@ -947,6 +1072,9 @@ func (s *Store) PortalDataByToken(ctx context.Context, token string) (PortalData
 			return PortalData{}, ErrNotFound
 		}
 		return PortalData{}, fmt.Errorf("load portal data: %w", err)
+	}
+	if portal.Subscription.Status != "active" || !portal.Subscription.ExpiresAt.After(time.Now().UTC()) {
+		return PortalData{}, ErrNotFound
 	}
 
 	nodes, err := s.ListNodes(ctx)
@@ -974,7 +1102,7 @@ func (s *Store) NodeBundle(ctx context.Context, nodeID string) (model.Node, []mo
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT p.id, p.name, p.protocol, p.listen_host, p.listen_port, p.transport, p.server_name, p.public_host, p.path, p.password, p.reality_public_key, p.reality_short_id, p.tls_mode, p.metadata_json, p.created_at, p.modified_at
+		`SELECT p.id, p.name, p.protocol, p.listen_host, p.listen_port, p.transport, p.server_name, p.public_host, p.path, p.password, p.reality_public_key, p.reality_private_key, p.reality_handshake_server, p.reality_handshake_port, p.reality_short_id, p.tls_mode, p.tls_cert_path, p.tls_key_path, p.shadowsocks_method, p.metadata_json, p.created_at, p.modified_at
 		   FROM inbound_profiles p
 		   JOIN node_inbound_bindings b ON b.inbound_profile_id = p.id
 		  WHERE b.node_id = ?
@@ -989,7 +1117,7 @@ func (s *Store) NodeBundle(ctx context.Context, nodeID string) (model.Node, []mo
 	for rows.Next() {
 		var item model.InboundProfile
 		var metadataJSON string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Protocol, &item.ListenHost, &item.ListenPort, &item.Transport, &item.ServerName, &item.PublicHost, &item.Path, &item.Password, &item.RealityPubKey, &item.RealityShort, &item.TLSMode, &metadataJSON, &item.CreatedAt, &item.ModifiedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Protocol, &item.ListenHost, &item.ListenPort, &item.Transport, &item.ServerName, &item.PublicHost, &item.Path, &item.Password, &item.RealityPubKey, &item.RealityPrivateKey, &item.RealityHandshakeServer, &item.RealityHandshakePort, &item.RealityShort, &item.TLSMode, &item.TLSCertPath, &item.TLSKeyPath, &item.ShadowsocksMethod, &metadataJSON, &item.CreatedAt, &item.ModifiedAt); err != nil {
 			return model.Node{}, nil, nil, nil, nil, fmt.Errorf("scan node inbound profile: %w", err)
 		}
 		if err := json.Unmarshal([]byte(metadataJSON), &item.Metadata); err != nil {

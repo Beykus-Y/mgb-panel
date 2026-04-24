@@ -23,6 +23,9 @@ func TestRenderURI(t *testing.T) {
 			ServerName:    "vpn.example.com",
 			TLSMode:       "reality",
 			RealityPubKey: "pubkey",
+			RealityPrivateKey:     "privkey",
+			RealityHandshakeServer: "www.cloudflare.com",
+			RealityHandshakePort:   443,
 			RealityShort:  "abcd",
 		},
 	}

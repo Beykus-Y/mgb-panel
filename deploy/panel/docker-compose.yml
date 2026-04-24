@@ -3,9 +3,6 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile.panel
-      args:
-        SINGBOX_IMAGE: "${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
-        SINGBOX_BINARY_PATH: "${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
     image: mgb-panel:dev
     restart: unless-stopped
     ports:
@@ -18,4 +15,28 @@ services:
       - "-data-dir=/var/lib/mgb-panel"
       - "-enable-local-node=${ENABLE_LOCAL_NODE:-false}"
       - "-local-node-token=${LOCAL_NODE_TOKEN:-}"
+
+  local-node:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.node
+      args:
+        SINGBOX_IMAGE: "${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
+        SINGBOX_BINARY_PATH: "${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
+    image: mgb-node:dev
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      - panel
+    volumes:
+      - "${LOCAL_NODE_STATE_DIR:-./state/local-node}:/var/lib/mgb-node"
+      - "${PANEL_STATE_DIR:-./state/panel}:/panel-state:ro"
+    command:
+      - "-panel-url=https://127.0.0.1:${PANEL_PORT:-8443}"
+      - "-state-dir=/var/lib/mgb-node"
+      - "-bootstrap-token-file=/panel-state/local-node/bootstrap-token"
+      - "-panel-ca-file=/panel-state/pki/ca.pem"
       - "-singbox-binary=/usr/local/bin/sing-box"
+      - "-poll-interval=${LOCAL_NODE_POLL_INTERVAL:-20s}"

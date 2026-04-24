@@ -29,6 +29,26 @@ run_privileged() {
   exit 1
 }
 
+generate_token() {
+  if has_cmd openssl; then
+    openssl rand -hex 24
+    return
+  fi
+  od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
+}
+
+require_https_url() {
+  local value="$1"
+  case "$value" in
+    https://*/*) ;;
+    https://*) ;;
+    *)
+      error "Публичный URL панели должен быть абсолютным HTTPS URL, например https://1.2.3.4:8443"
+      exit 1
+      ;;
+  esac
+}
+
 prompt() {
   local var_name="$1"
   local label="$2"
@@ -100,6 +120,8 @@ PANEL_BASE_URL=$PANEL_BASE_URL
 PANEL_STATE_DIR=$PANEL_STATE_DIR
 ENABLE_LOCAL_NODE=$ENABLE_LOCAL_NODE
 LOCAL_NODE_TOKEN=$LOCAL_NODE_TOKEN
+LOCAL_NODE_STATE_DIR=$LOCAL_NODE_STATE_DIR
+LOCAL_NODE_POLL_INTERVAL=$LOCAL_NODE_POLL_INTERVAL
 SINGBOX_IMAGE=$SINGBOX_IMAGE
 SINGBOX_BINARY_PATH=$SINGBOX_BINARY_PATH
 EOF
@@ -197,6 +219,8 @@ usage() {
   --panel-port PORT
   --enable-local-node true|false
   --local-node-token TOKEN
+  --local-node-state-dir PATH
+  --local-node-poll-interval DURATION
   --singbox-image IMAGE
   --help
 EOF
@@ -209,6 +233,8 @@ PANEL_BASE_URL="${PANEL_BASE_URL:-}"
 PANEL_PORT="${PANEL_PORT:-8443}"
 ENABLE_LOCAL_NODE="${ENABLE_LOCAL_NODE:-false}"
 LOCAL_NODE_TOKEN="${LOCAL_NODE_TOKEN:-}"
+LOCAL_NODE_STATE_DIR="${LOCAL_NODE_STATE_DIR:-}"
+LOCAL_NODE_POLL_INTERVAL="${LOCAL_NODE_POLL_INTERVAL:-20s}"
 SINGBOX_IMAGE="${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
 SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
 EXISTING_ACTION=""
@@ -224,6 +250,8 @@ while [[ $# -gt 0 ]]; do
     --panel-port) PANEL_PORT="$2"; shift 2 ;;
     --enable-local-node) ENABLE_LOCAL_NODE="$2"; shift 2 ;;
     --local-node-token) LOCAL_NODE_TOKEN="$2"; shift 2 ;;
+    --local-node-state-dir) LOCAL_NODE_STATE_DIR="$2"; shift 2 ;;
+    --local-node-poll-interval) LOCAL_NODE_POLL_INTERVAL="$2"; shift 2 ;;
     --singbox-image) SINGBOX_IMAGE="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *)
@@ -236,9 +264,13 @@ done
 
 prompt REPO_URL "URL git репозитория с mgb-panel" "https://github.com/Beykus-Y/mgb-panel"
 prompt PANEL_BASE_URL "Публичный URL панели" "https://panel.example.com:$PANEL_PORT"
+require_https_url "$PANEL_BASE_URL"
 
 REPO_DIR="$INSTALL_DIR/repo"
 PANEL_STATE_DIR="$INSTALL_DIR/state"
+if [[ -z "$LOCAL_NODE_STATE_DIR" ]]; then
+  LOCAL_NODE_STATE_DIR="$INSTALL_DIR/local-node-state"
+fi
 ENV_FILE="$INSTALL_DIR/panel.env"
 COMPOSE_FILE="$REPO_DIR/deploy/panel/docker-compose.yml"
 
@@ -266,6 +298,11 @@ if has_existing_install; then
 fi
 
 mkdir -p "$INSTALL_DIR" "$PANEL_STATE_DIR"
+
+if [[ "$ENABLE_LOCAL_NODE" == "true" && -z "$LOCAL_NODE_TOKEN" ]]; then
+  LOCAL_NODE_TOKEN="$(generate_token)"
+  info "Сгенерирован bootstrap token для локального node-agent контейнера"
+fi
 
 ensure_repo
 write_env

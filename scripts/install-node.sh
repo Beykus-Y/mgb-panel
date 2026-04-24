@@ -29,6 +29,18 @@ run_privileged() {
   exit 1
 }
 
+require_https_url() {
+  local value="$1"
+  case "$value" in
+    https://*/*) ;;
+    https://*) ;;
+    *)
+      error "URL панели должен быть абсолютным HTTPS URL, например https://1.2.3.4:8443"
+      exit 1
+      ;;
+  esac
+}
+
 prompt() {
   local var_name="$1"
   local label="$2"
@@ -307,6 +319,7 @@ if [[ -z "${LOCAL_REPO_DIR:-}" ]]; then
   prompt REPO_URL "URL git репозитория с mgb-panel" "https://github.com/Beykus-Y/mgb-panel"
 fi
 prompt PANEL_URL "URL панели" "https://panel.example.com:8443"
+require_https_url "$PANEL_URL"
 prompt BOOTSTRAP_TOKEN "Bootstrap token ноды"
 
 if [[ "$CA_MODE" == "manual" ]]; then

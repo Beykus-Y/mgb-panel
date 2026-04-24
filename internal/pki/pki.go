@@ -51,6 +51,12 @@ func LoadOrCreate(dir, commonName string) (*Authority, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load panel tls keypair: %w", err)
 		}
+		if !panelCertificateCoversHost(panelCert, commonName) {
+			panelCert, err = writePanelCertificate(dir, commonName, caCert, caKey)
+			if err != nil {
+				return nil, err
+			}
+		}
 		return &Authority{caCert: caCert, caKey: caKey, caPEM: caPEM, panelCert: panelCert}, nil
 	}
 
@@ -82,6 +88,14 @@ func LoadOrCreate(dir, commonName string) (*Authority, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate panel key: %w", err)
 	}
+	dnsNames := []string{"localhost"}
+	ipAddresses := []net.IP{net.ParseIP("127.0.0.1")}
+	if ip := net.ParseIP(commonName); ip != nil {
+		ipAddresses = append(ipAddresses, ip)
+	} else if commonName != "" && commonName != "localhost" {
+		dnsNames = append(dnsNames, commonName)
+	}
+
 	panelTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano() + 1),
 		Subject: pkix.Name{
@@ -92,8 +106,8 @@ func LoadOrCreate(dir, commonName string) (*Authority, error) {
 		NotAfter:    time.Now().AddDate(3, 0, 0),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:    []string{"localhost", commonName},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:    dnsNames,
+		IPAddresses: ipAddresses,
 	}
 	panelDER, err := x509.CreateCertificate(rand.Reader, panelTemplate, caTemplate, &panelKey.PublicKey, caKey)
 	if err != nil {
@@ -196,6 +210,63 @@ func VerifyClientCertificate(raw *tls.ConnectionState) (string, error) {
 		return "", fmt.Errorf("client certificate missing common name")
 	}
 	return cert.Subject.CommonName, nil
+}
+
+func panelCertificateCoversHost(cert tls.Certificate, host string) bool {
+	if len(cert.Certificate) == 0 || host == "" {
+		return true
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return false
+	}
+	return leaf.VerifyHostname(host) == nil
+}
+
+func writePanelCertificate(dir, commonName string, caCert *x509.Certificate, caKey *rsa.PrivateKey) (tls.Certificate, error) {
+	panelKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate panel key: %w", err)
+	}
+	dnsNames := []string{"localhost"}
+	ipAddresses := []net.IP{net.ParseIP("127.0.0.1")}
+	if ip := net.ParseIP(commonName); ip != nil {
+		ipAddresses = append(ipAddresses, ip)
+	} else if commonName != "" && commonName != "localhost" {
+		dnsNames = append(dnsNames, commonName)
+	}
+	panelTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano() + 1),
+		Subject: pkix.Name{
+			CommonName:   commonName,
+			Organization: []string{"mgb-panel"},
+		},
+		NotBefore:   time.Now().Add(-time.Hour),
+		NotAfter:    time.Now().AddDate(3, 0, 0),
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:    dnsNames,
+		IPAddresses: ipAddresses,
+	}
+	panelDER, err := x509.CreateCertificate(rand.Reader, panelTemplate, caCert, &panelKey.PublicKey, caKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create panel certificate: %w", err)
+	}
+	panelCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: panelDER})
+	panelKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(panelKey)})
+	panelCertPath := filepath.Join(dir, "panel.pem")
+	panelKeyPath := filepath.Join(dir, "panel-key.pem")
+	if err := os.WriteFile(panelCertPath, panelCertPEM, 0o644); err != nil {
+		return tls.Certificate{}, fmt.Errorf("write %s: %w", panelCertPath, err)
+	}
+	if err := os.WriteFile(panelKeyPath, panelKeyPEM, 0o600); err != nil {
+		return tls.Certificate{}, fmt.Errorf("write %s: %w", panelKeyPath, err)
+	}
+	panelCert, err := tls.LoadX509KeyPair(panelCertPath, panelKeyPath)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("load panel tls keypair: %w", err)
+	}
+	return panelCert, nil
 }
 
 func parseCA(certPEM, keyPEM []byte) (*x509.Certificate, *rsa.PrivateKey, error) {

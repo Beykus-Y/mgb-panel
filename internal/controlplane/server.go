@@ -10,15 +10,15 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"mgb-panel/internal/database"
+	"mgb-panel/internal/inboundrules"
 	"mgb-panel/internal/model"
-	"mgb-panel/internal/nodeagent"
 	"mgb-panel/internal/pki"
 	"mgb-panel/internal/subscriptions"
 	"mgb-panel/internal/topology"
@@ -37,8 +37,6 @@ type Server struct {
 	localPoll   time.Duration
 	templates   *template.Template
 	httpServer  *http.Server
-	agentMu     sync.Mutex
-	agentCancel context.CancelFunc
 }
 
 type Config struct {
@@ -228,8 +226,10 @@ func (s *Server) handleCreateUserForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := s.store.CreateUser(r.Context(), database.CreateUserParams{
-		Name:  defaultForm(r, "name", "user"),
-		Email: defaultForm(r, "email", "user@example.com"),
+		Name:     defaultForm(r, "name", "user"),
+		Email:    defaultForm(r, "email", "user@example.com"),
+		Telegram: strings.TrimSpace(r.FormValue("telegram")),
+		Note:     strings.TrimSpace(r.FormValue("note")),
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -260,21 +260,33 @@ func (s *Server) handleCreateInboundForm(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	port, _ := strconv.Atoi(defaultForm(r, "listen_port", "443"))
-	if _, err := s.store.CreateInboundProfile(r.Context(), database.CreateInboundProfileParams{
-		Name:          defaultForm(r, "name", "default-inbound"),
-		Protocol:      strings.ToLower(defaultForm(r, "protocol", "vless")),
-		ListenHost:    defaultForm(r, "listen_host", "::"),
-		ListenPort:    port,
-		Transport:     r.FormValue("transport"),
-		ServerName:    r.FormValue("server_name"),
-		PublicHost:    r.FormValue("public_host"),
-		Path:          r.FormValue("path"),
-		Password:      r.FormValue("password"),
-		RealityPubKey: r.FormValue("reality_public_key"),
-		RealityShort:  r.FormValue("reality_short_id"),
-		TLSMode:       r.FormValue("tls_mode"),
-		Metadata:      map[string]string{"created_by": "dashboard"},
-	}); err != nil {
+	realityHandshakePort, _ := strconv.Atoi(defaultForm(r, "reality_handshake_port", "443"))
+	params, err := normalizeInboundCreateParams(database.CreateInboundProfileParams{
+		Name:                   defaultForm(r, "name", "default-inbound"),
+		Protocol:               strings.ToLower(defaultForm(r, "protocol", "vless")),
+		ListenHost:             defaultForm(r, "listen_host", "::"),
+		ListenPort:             port,
+		Transport:              r.FormValue("transport"),
+		ServerName:             r.FormValue("server_name"),
+		PublicHost:             r.FormValue("public_host"),
+		Path:                   r.FormValue("path"),
+		Password:               r.FormValue("password"),
+		RealityPubKey:          r.FormValue("reality_public_key"),
+		RealityPrivateKey:     r.FormValue("reality_private_key"),
+		RealityHandshakeServer: r.FormValue("reality_handshake_server"),
+		RealityHandshakePort:   realityHandshakePort,
+		RealityShort:           r.FormValue("reality_short_id"),
+		TLSMode:                r.FormValue("tls_mode"),
+		TLSCertPath:            r.FormValue("tls_cert_path"),
+		TLSKeyPath:             r.FormValue("tls_key_path"),
+		ShadowsocksMethod:      r.FormValue("shadowsocks_method"),
+		Metadata:               map[string]string{"created_by": "dashboard"},
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := s.store.CreateInboundProfile(r.Context(), params); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -353,14 +365,16 @@ func (s *Server) handleAdminUsersAPI(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, users, err)
 	case http.MethodPost:
 		var req struct {
-			Name  string `json:"name"`
-			Email string `json:"email"`
+			Name     string `json:"name"`
+			Email    string `json:"email"`
+			Telegram string `json:"telegram"`
+			Note     string `json:"note"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		user, err := s.store.CreateUser(r.Context(), database.CreateUserParams{Name: req.Name, Email: req.Email})
+		user, err := s.store.CreateUser(r.Context(), database.CreateUserParams{Name: req.Name, Email: req.Email, Telegram: req.Telegram, Note: req.Note})
 		writeJSON(w, user, err)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -404,10 +418,12 @@ func (s *Server) handleAdminInboundsAPI(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.ListenHost == "" {
-			req.ListenHost = "::"
+		params, err := normalizeInboundCreateParams(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
-		inbound, err := s.store.CreateInboundProfile(r.Context(), req)
+		inbound, err := s.store.CreateInboundProfile(r.Context(), params)
 		writeJSON(w, inbound, err)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -526,16 +542,18 @@ func (s *Server) handleNodeConfig(w http.ResponseWriter, r *http.Request, nodeID
 
 	activeUsers := make([]model.User, 0, len(users))
 	userMap := make(map[string]model.User, len(users))
+	activeUserIDs := make(map[string]struct{}, len(users))
 	for _, user := range users {
 		userMap[user.ID] = user
 	}
 	for _, sub := range subs {
+		if _, seen := activeUserIDs[sub.UserID]; seen {
+			continue
+		}
 		if user, ok := userMap[sub.UserID]; ok {
 			activeUsers = append(activeUsers, user)
+			activeUserIDs[sub.UserID] = struct{}{}
 		}
-	}
-	if len(activeUsers) == 0 {
-		activeUsers = users
 	}
 
 	configBytes, err := topology.CompileNodeConfig(node, inbounds, links, activeUsers)
@@ -610,22 +628,24 @@ func (s *Server) handlePortal(w http.ResponseWriter, r *http.Request) {
 		if !nodeFound || !inboundFound {
 			continue
 		}
-		endpoints = append(endpoints, portalEndpoint{
-			Node: node,
-			URI: subscriptions.RenderURI(subscriptions.Endpoint{
-				NodeName: node.Name,
-				Host:     publicHostForNode(node, inbound, r.Host),
-				Profile:  inbound,
-				User:     portal.User,
-			}),
+		uri := subscriptions.RenderURI(subscriptions.Endpoint{
+			NodeName: node.Name,
+			Host:     publicHostForNode(node, inbound, r.Host),
+			Profile:  inbound,
+			User:     portal.User,
 		})
+		if uri == "" {
+			continue
+		}
+		endpoints = append(endpoints, portalEndpoint{Node: node, URI: uri})
 	}
 
+	baseURL := s.effectiveBaseURL(r)
 	data := map[string]any{
 		"BaseURL":      s.baseURL,
 		"Portal":       portal,
-		"PortalURL":    s.baseURL + "/portal/" + token,
-		"FeedURL":      s.baseURL + "/subscription/" + token,
+		"PortalURL":    baseURL + "/portal/" + token,
+		"FeedURL":      baseURL + "/subscription/" + token,
 		"ManualConfig": endpoints,
 	}
 	if err := s.templates.ExecuteTemplate(w, "portal.html", data); err != nil {
@@ -662,12 +682,15 @@ func (s *Server) handleSubscriptionFeed(w http.ResponseWriter, r *http.Request) 
 		if !okNode || !okInbound {
 			continue
 		}
-		lines = append(lines, subscriptions.RenderURI(subscriptions.Endpoint{
+		uri := subscriptions.RenderURI(subscriptions.Endpoint{
 			NodeName: node.Name,
 			Host:     publicHostForNode(node, inbound, r.Host),
 			Profile:  inbound,
 			User:     portal.User,
-		}))
+		})
+		if uri != "" {
+			lines = append(lines, uri)
+		}
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte(strings.Join(lines, "\n")))
@@ -704,6 +727,52 @@ func defaultForm(r *http.Request, key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func normalizeInboundCreateParams(params database.CreateInboundProfileParams) (database.CreateInboundProfileParams, error) {
+	profile, err := inboundrules.Normalize(model.InboundProfile{
+		Name:                   params.Name,
+		Protocol:               params.Protocol,
+		ListenHost:             params.ListenHost,
+		ListenPort:             params.ListenPort,
+		Transport:              params.Transport,
+		ServerName:             params.ServerName,
+		PublicHost:             params.PublicHost,
+		Path:                   params.Path,
+		Password:               params.Password,
+		RealityPubKey:          params.RealityPubKey,
+		RealityPrivateKey:      params.RealityPrivateKey,
+		RealityHandshakeServer: params.RealityHandshakeServer,
+		RealityHandshakePort:   params.RealityHandshakePort,
+		RealityShort:           params.RealityShort,
+		TLSMode:                params.TLSMode,
+		TLSCertPath:            params.TLSCertPath,
+		TLSKeyPath:             params.TLSKeyPath,
+		ShadowsocksMethod:      params.ShadowsocksMethod,
+		Metadata:               params.Metadata,
+	})
+	if err != nil {
+		return params, err
+	}
+	params.Name = profile.Name
+	params.Protocol = profile.Protocol
+	params.ListenHost = profile.ListenHost
+	params.ListenPort = profile.ListenPort
+	params.Transport = profile.Transport
+	params.ServerName = profile.ServerName
+	params.PublicHost = profile.PublicHost
+	params.Path = profile.Path
+	params.Password = profile.Password
+	params.RealityPubKey = profile.RealityPubKey
+	params.RealityPrivateKey = profile.RealityPrivateKey
+	params.RealityHandshakeServer = profile.RealityHandshakeServer
+	params.RealityHandshakePort = profile.RealityHandshakePort
+	params.RealityShort = profile.RealityShort
+	params.TLSMode = profile.TLSMode
+	params.TLSCertPath = profile.TLSCertPath
+	params.TLSKeyPath = profile.TLSKeyPath
+	params.ShadowsocksMethod = profile.ShadowsocksMethod
+	return params, nil
 }
 
 func (s *Server) handleInstallScript(assetPath string) http.HandlerFunc {
@@ -887,6 +956,8 @@ func transportLabel(transport string) string {
 		return "gRPC"
 	case "httpupgrade":
 		return "HTTPUpgrade"
+	case "http":
+		return "HTTP"
 	case "quic":
 		return "QUIC"
 	case "tcp":
@@ -944,32 +1015,46 @@ func nodeInstallCommand(baseURL, enrollToken, fingerprint string) string {
 // falling back to request host when baseURL is a placeholder.
 func (s *Server) effectiveBaseURL(r *http.Request) string {
 	parsed, err := url.Parse(s.baseURL)
-	if err != nil {
-		return "https://" + r.Host
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return requestBaseURL(r)
 	}
 	host := parsed.Hostname()
 	if host == "localhost" || host == "127.0.0.1" ||
 		strings.HasSuffix(host, ".example.com") ||
 		strings.HasSuffix(host, ".example.org") ||
 		host == "example.com" || host == "example.org" {
-		return "https://" + r.Host
+		return requestBaseURL(r)
 	}
 	return s.baseURL
 }
 
-// localPanelURL returns a loopback URL suitable for the in-process node agent.
-// The panel TLS cert always includes 127.0.0.1 as an IP SAN.
-func (s *Server) localPanelURL() string {
-	_, port, err := net.SplitHostPort(s.listenAddr)
-	if err != nil || port == "" {
-		port = "8443"
+func requestBaseURL(r *http.Request) string {
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = r.Host
 	}
-	return "https://127.0.0.1:" + port
+	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if proto == "" {
+		proto = "https"
+	}
+	if strings.Contains(host, ",") {
+		host, _, _ = strings.Cut(host, ",")
+		host = strings.TrimSpace(host)
+	}
+	if strings.Contains(proto, ",") {
+		proto, _, _ = strings.Cut(proto, ",")
+		proto = strings.TrimSpace(proto)
+	}
+	return proto + "://" + host
 }
 
 func (s *Server) handleEnableLocalNode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.dataDir == "" {
+		http.Error(w, "data dir is required to enable local node", http.StatusInternalServerError)
 		return
 	}
 	dashboard, err := s.store.Dashboard(r.Context())
@@ -978,17 +1063,20 @@ func (s *Server) handleEnableLocalNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var nodeID, token string
-	for _, n := range dashboard.Nodes {
-		if n.IsLocal {
-			nodeID = n.ID
-			break
+	var token string
+	for _, node := range dashboard.Nodes {
+		if !node.IsLocal {
+			continue
 		}
+		token, err = s.store.IssueEnrollToken(r.Context(), node.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		break
 	}
-
-	if nodeID == "" {
-		// First time: create the local node (token comes from CreateNode)
-		n, err := s.store.CreateNode(r.Context(), database.CreateNodeParams{
+	if token == "" {
+		node, err := s.store.CreateNode(r.Context(), database.CreateNodeParams{
 			Name:    "local-panel",
 			Address: "127.0.0.1",
 			Role:    "edge",
@@ -998,92 +1086,23 @@ func (s *Server) handleEnableLocalNode(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		token = n.EnrollToken
-	} else {
-		// Reconnect: always issue a fresh token so re-enrollment works
-		// even if the previous token was already consumed.
-		// If cert files still exist on disk, the agent will skip enrollment anyway.
-		token, err = s.store.IssueEnrollToken(r.Context(), nodeID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+		token = node.EnrollToken
 	}
-
-	if s.dataDir != "" && s.singboxBin != "" {
-		if err := s.startLocalAgent(token); err != nil {
-			http.Error(w, "запуск агента: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+	if err := writeLocalNodeBootstrapToken(s.dataDir, token); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	http.Redirect(w, r, "/nodes", http.StatusSeeOther)
 }
 
-// StartLocalAgentIfPresent checks whether a local node exists in the DB
-// and starts the node-agent goroutine automatically. Call once after the
-// TLS listener is up so the agent can reach the panel over 127.0.0.1.
-func (s *Server) StartLocalAgentIfPresent(ctx context.Context) {
-	if s.dataDir == "" || s.singboxBin == "" {
-		return
+func writeLocalNodeBootstrapToken(dataDir, token string) error {
+	dir := filepath.Join(dataDir, "local-node")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("mkdir local node dir: %w", err)
 	}
-	nodes, err := s.store.ListNodes(ctx)
-	if err != nil {
-		log.Printf("StartLocalAgentIfPresent: list nodes: %v", err)
-		return
+	path := filepath.Join(dir, "bootstrap-token")
+	if err := os.WriteFile(path, []byte(strings.TrimSpace(token)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write local node bootstrap token: %w", err)
 	}
-	for _, node := range nodes {
-		if !node.IsLocal {
-			continue
-		}
-		// Issue a fresh token so re-enrollment works if cert files were lost.
-		token, err := s.store.IssueEnrollToken(ctx, node.ID)
-		if err != nil {
-			log.Printf("StartLocalAgentIfPresent: issue token: %v", err)
-			return
-		}
-		go func(t string) {
-			// Brief delay: give the TLS listener time to start accepting.
-			select {
-			case <-time.After(2 * time.Second):
-			case <-ctx.Done():
-				return
-			}
-			if err := s.startLocalAgent(t); err != nil {
-				log.Printf("StartLocalAgentIfPresent: start agent: %v", err)
-			}
-		}(token)
-		return
-	}
-}
-
-func (s *Server) startLocalAgent(token string) error {
-	s.agentMu.Lock()
-	defer s.agentMu.Unlock()
-
-	if s.agentCancel != nil {
-		s.agentCancel()
-		s.agentCancel = nil
-	}
-
-	agent, err := nodeagent.New(nodeagent.Config{
-		PanelURL:         s.localPanelURL(),
-		StateDir:         filepath.Join(s.dataDir, "local-node"),
-		BootstrapToken:   token,
-		PanelCAFile:      filepath.Join(s.dataDir, "pki", "ca.pem"),
-		SingboxBinary:    s.singboxBin,
-		PollInterval:     s.localPoll,
-		PanelFingerprint: s.authority.FingerprintHex(),
-	})
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	s.agentCancel = cancel
-	go func() {
-		if err := agent.Run(ctx); err != nil && err != context.Canceled {
-			log.Printf("local node agent: %v", err)
-		}
-	}()
 	return nil
 }

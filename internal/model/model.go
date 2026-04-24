@@ -23,6 +23,8 @@ type User struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
 	Email      string    `json:"email"`
+	Telegram   string    `json:"telegram"`
+	Note       string    `json:"note"`
 	AccessKey  string    `json:"access_key"`
 	CreatedAt  time.Time `json:"created_at"`
 	ModifiedAt time.Time `json:"modified_at"`
@@ -40,22 +42,28 @@ type Subscription struct {
 }
 
 type InboundProfile struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Protocol      string            `json:"protocol"`
-	ListenHost    string            `json:"listen_host"`
-	ListenPort    int               `json:"listen_port"`
-	Transport     string            `json:"transport"`
-	ServerName    string            `json:"server_name"`
-	PublicHost    string            `json:"public_host"`
-	Path          string            `json:"path"`
-	Password      string            `json:"password"`
-	RealityPubKey string            `json:"reality_public_key"`
-	RealityShort  string            `json:"reality_short_id"`
-	TLSMode       string            `json:"tls_mode"`
-	Metadata      map[string]string `json:"metadata"`
-	CreatedAt     time.Time         `json:"created_at"`
-	ModifiedAt    time.Time         `json:"modified_at"`
+	ID                     string            `json:"id"`
+	Name                   string            `json:"name"`
+	Protocol               string            `json:"protocol"`
+	ListenHost             string            `json:"listen_host"`
+	ListenPort             int               `json:"listen_port"`
+	Transport              string            `json:"transport"`
+	ServerName             string            `json:"server_name"`
+	PublicHost             string            `json:"public_host"`
+	Path                   string            `json:"path"`
+	Password               string            `json:"password"`
+	RealityPubKey          string            `json:"reality_public_key"`
+	RealityPrivateKey      string            `json:"reality_private_key"`
+	RealityHandshakeServer string            `json:"reality_handshake_server"`
+	RealityHandshakePort   int               `json:"reality_handshake_port"`
+	RealityShort           string            `json:"reality_short_id"`
+	TLSMode                string            `json:"tls_mode"`
+	TLSCertPath            string            `json:"tls_cert_path"`
+	TLSKeyPath             string            `json:"tls_key_path"`
+	ShadowsocksMethod      string            `json:"shadowsocks_method"`
+	Metadata               map[string]string `json:"metadata"`
+	CreatedAt              time.Time         `json:"created_at"`
+	ModifiedAt             time.Time         `json:"modified_at"`
 }
 
 type NodeInboundBinding struct {

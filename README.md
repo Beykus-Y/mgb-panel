@@ -42,6 +42,7 @@ Go monorepo for a `sing-box` control plane with two install profiles:
 - Docker-first install artifacts for:
   - panel
   - node-only agent
+  - optional local node as a separate `local-node` Docker Compose service
 
 ## Repository layout
 
@@ -157,6 +158,7 @@ Notes:
 - `Dockerfile.node` copies `sing-box` from `ghcr.io/sagernet/sing-box:v1.13.11` by default.
 - If that image exposes the binary at a different path in your environment, override `SINGBOX_BINARY_PATH`.
 - `deploy/node/docker-compose.yml` uses `network_mode: host` and `NET_ADMIN` because node deployments commonly need direct networking control.
+- Local node mode no longer runs `sing-box` inside the panel process. Compose starts a separate dormant `local-node` service with host networking; click "Включить локальный узел" in the panel to write its bootstrap token and enroll it.
 
 ## HTTP surfaces
 

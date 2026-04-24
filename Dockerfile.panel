@@ -1,6 +1,3 @@
-ARG SINGBOX_IMAGE=ghcr.io/sagernet/sing-box:v1.13.11
-ARG SINGBOX_BINARY_PATH=/usr/local/bin/sing-box
-
 FROM golang:1.22-bookworm AS builder
 
 WORKDIR /src
@@ -9,13 +6,9 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/panel ./cmd/panel
 
-FROM ${SINGBOX_IMAGE} AS singbox
-
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /var/lib/mgb-panel
 COPY --from=builder /out/panel /usr/local/bin/panel
-COPY --from=singbox ${SINGBOX_BINARY_PATH} /usr/local/bin/sing-box
-RUN chmod +x /usr/local/bin/sing-box
 EXPOSE 8443
 ENTRYPOINT ["panel"]

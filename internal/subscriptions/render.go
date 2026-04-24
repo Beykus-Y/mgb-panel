@@ -1,11 +1,13 @@
 package subscriptions
 
 import (
+	"encoding/base64"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
-	"strings"
 
+	"mgb-panel/internal/inboundrules"
 	"mgb-panel/internal/model"
 )
 
@@ -28,73 +30,66 @@ func RenderURI(ep Endpoint) string {
 		host = ep.NodeName
 	}
 
-	switch strings.ToLower(ep.Profile.Protocol) {
+	profile, err := inboundrules.Normalize(ep.Profile)
+	if err != nil {
+		return ""
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(profile.ListenPort))
+
+	switch profile.Protocol {
 	case "vless":
 		query := url.Values{}
 		query.Set("encryption", "none")
-		if ep.Profile.Transport != "" {
-			query.Set("type", ep.Profile.Transport)
+		if profile.Transport != "" {
+			query.Set("type", profile.Transport)
 		}
-		if ep.Profile.Path != "" {
-			query.Set("path", ep.Profile.Path)
+		setTransportQuery(query, profile)
+		if profile.TLSMode != "" {
+			query.Set("security", profile.TLSMode)
 		}
-		if ep.Profile.TLSMode != "" {
-			query.Set("security", strings.ToLower(ep.Profile.TLSMode))
+		if profile.ServerName != "" {
+			query.Set("sni", profile.ServerName)
 		}
-		if ep.Profile.ServerName != "" {
-			query.Set("sni", ep.Profile.ServerName)
+		if profile.RealityPubKey != "" {
+			query.Set("pbk", profile.RealityPubKey)
 		}
-		if ep.Profile.RealityPubKey != "" {
-			query.Set("pbk", ep.Profile.RealityPubKey)
+		if profile.RealityShort != "" {
+			query.Set("sid", profile.RealityShort)
 		}
-		if ep.Profile.RealityShort != "" {
-			query.Set("sid", ep.Profile.RealityShort)
-		}
-		return fmt.Sprintf(
-			"vless://%s@%s:%d?%s#%s",
-			ep.User.AccessKey,
-			host,
-			ep.Profile.ListenPort,
-			query.Encode(),
-			url.QueryEscape(ep.Profile.Name),
-		)
+		return fmt.Sprintf("vless://%s@%s?%s#%s", ep.User.AccessKey, addr, query.Encode(), url.QueryEscape(profile.Name))
 	case "trojan":
 		query := url.Values{}
-		if ep.Profile.ServerName != "" {
-			query.Set("sni", ep.Profile.ServerName)
+		if profile.TLSMode != "" {
+			query.Set("security", profile.TLSMode)
 		}
-		return fmt.Sprintf(
-			"trojan://%s@%s:%d?%s#%s",
-			url.QueryEscape(ep.Profile.Password),
-			host,
-			ep.Profile.ListenPort,
-			query.Encode(),
-			url.QueryEscape(ep.Profile.Name),
-		)
+		if profile.ServerName != "" {
+			query.Set("sni", profile.ServerName)
+		}
+		setTransportQuery(query, profile)
+		return fmt.Sprintf("trojan://%s@%s?%s#%s", url.PathEscape(profile.Password), addr, query.Encode(), url.QueryEscape(profile.Name))
 	case "hysteria2":
 		query := url.Values{}
-		if ep.Profile.ServerName != "" {
-			query.Set("sni", ep.Profile.ServerName)
+		if profile.ServerName != "" {
+			query.Set("sni", profile.ServerName)
 		}
-		if ep.Profile.Password != "" {
-			query.Set("password", ep.Profile.Password)
-		}
-		return fmt.Sprintf(
-			"hysteria2://%s:%d?%s#%s",
-			host,
-			ep.Profile.ListenPort,
-			query.Encode(),
-			url.QueryEscape(ep.Profile.Name),
-		)
+		return fmt.Sprintf("hysteria2://%s@%s?%s#%s", url.PathEscape(profile.Password), addr, query.Encode(), url.QueryEscape(profile.Name))
 	case "shadowsocks":
-		return fmt.Sprintf(
-			"ss://%s@%s:%s#%s",
-			url.QueryEscape(ep.Profile.Password),
-			host,
-			strconv.Itoa(ep.Profile.ListenPort),
-			url.QueryEscape(ep.Profile.Name),
-		)
+		userinfo := base64.RawURLEncoding.EncodeToString([]byte(profile.ShadowsocksMethod + ":" + profile.Password))
+		return fmt.Sprintf("ss://%s@%s#%s", userinfo, addr, url.QueryEscape(profile.Name))
 	default:
-		return fmt.Sprintf("%s://%s:%d#%s", ep.Profile.Protocol, host, ep.Profile.ListenPort, url.QueryEscape(ep.Profile.Name))
+		return fmt.Sprintf("%s://%s#%s", profile.Protocol, addr, url.QueryEscape(profile.Name))
+	}
+}
+
+func setTransportQuery(query url.Values, profile model.InboundProfile) {
+	switch profile.Transport {
+	case "grpc":
+		if profile.Path != "" {
+			query.Set("serviceName", profile.Path)
+		}
+	case "ws", "http", "httpupgrade":
+		if profile.Path != "" {
+			query.Set("path", profile.Path)
+		}
 	}
 }

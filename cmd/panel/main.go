@@ -14,7 +14,6 @@ import (
 
 	"mgb-panel/internal/controlplane"
 	"mgb-panel/internal/database"
-	"mgb-panel/internal/nodeagent"
 	"mgb-panel/internal/pki"
 )
 
@@ -23,10 +22,10 @@ func main() {
 		listenAddr      = flag.String("listen", ":8443", "HTTPS listen address")
 		baseURL         = flag.String("base-url", "https://localhost:8443", "public base URL")
 		dataDir         = flag.String("data-dir", "./var/panel", "panel data directory")
-		enableLocalNode = flag.Bool("enable-local-node", false, "run node-agent in the same process")
-		localNodeToken  = flag.String("local-node-token", "", "bootstrap token for embedded node-agent")
+		enableLocalNode = flag.Bool("enable-local-node", false, "provision a local node record for a separate node-agent container")
+		localNodeToken  = flag.String("local-node-token", "", "bootstrap token for the local node-agent container")
 		singboxBinary   = flag.String("singbox-binary", "sing-box", "path to sing-box binary")
-		localNodePoll   = flag.Duration("local-node-poll", 20*time.Second, "embedded node-agent poll interval")
+		localNodePoll   = flag.Duration("local-node-poll", 20*time.Second, "local node-agent poll interval")
 	)
 	flag.Parse()
 
@@ -70,23 +69,13 @@ func main() {
 		if *localNodeToken == "" {
 			log.Fatal("local node requested but -local-node-token is empty")
 		}
-		agent, err := nodeagent.New(nodeagent.Config{
-			PanelURL:         strings.TrimRight(*baseURL, "/"),
-			StateDir:         filepath.Join(*dataDir, "local-node"),
-			BootstrapToken:   *localNodeToken,
-			PanelCAFile:      filepath.Join(*dataDir, "pki", "ca.pem"),
-			SingboxBinary:    *singboxBinary,
-			PollInterval:     *localNodePoll,
-			PanelFingerprint: authority.FingerprintHex(),
-		})
-		if err != nil {
-			log.Fatalf("build local node agent: %v", err)
+		if _, err := store.EnsureLocalNode(ctx, *localNodeToken); err != nil {
+			log.Fatalf("ensure local node: %v", err)
 		}
-		go func() {
-			if err := agent.Run(ctx); err != nil && err != context.Canceled {
-				log.Printf("local node agent stopped: %v", err)
-			}
-		}()
+		if err := writeLocalNodeBootstrapToken(*dataDir, *localNodeToken); err != nil {
+			log.Fatalf("write local node bootstrap token: %v", err)
+		}
+		log.Printf("local node record is ready; node-agent is expected to run as a separate container")
 	}
 
 	go func() {
@@ -96,13 +85,18 @@ func main() {
 		}
 	}()
 
-	// Auto-start embedded node-agent if a local node was previously enabled via the UI.
-	server.StartLocalAgentIfPresent(ctx)
-
 	<-ctx.Done()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+}
+
+func writeLocalNodeBootstrapToken(dataDir, token string) error {
+	dir := filepath.Join(dataDir, "local-node")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "bootstrap-token"), []byte(strings.TrimSpace(token)+"\n"), 0o600)
 }

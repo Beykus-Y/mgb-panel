@@ -14,24 +14,26 @@ import (
 
 func main() {
 	var (
-		panelURL         = flag.String("panel-url", "https://localhost:8443", "panel base URL")
-		stateDir         = flag.String("state-dir", "./var/node", "node state directory")
-		bootstrapToken   = flag.String("bootstrap-token", "", "bootstrap token issued by the panel")
-		panelCAFile      = flag.String("panel-ca-file", "", "path to panel CA certificate bundle")
-		panelFingerprint = flag.String("panel-fingerprint", "", "expected panel CA SHA-256 fingerprint")
-		singboxBinary    = flag.String("singbox-binary", "sing-box", "path to sing-box binary")
-		pollInterval     = flag.Duration("poll-interval", 20*time.Second, "poll interval")
+		panelURL           = flag.String("panel-url", "https://localhost:8443", "panel base URL")
+		stateDir           = flag.String("state-dir", "./var/node", "node state directory")
+		bootstrapToken     = flag.String("bootstrap-token", "", "bootstrap token issued by the panel")
+		bootstrapTokenFile = flag.String("bootstrap-token-file", "", "path to bootstrap token file")
+		panelCAFile        = flag.String("panel-ca-file", "", "path to panel CA certificate bundle")
+		panelFingerprint   = flag.String("panel-fingerprint", "", "expected panel CA SHA-256 fingerprint")
+		singboxBinary      = flag.String("singbox-binary", "sing-box", "path to sing-box binary")
+		pollInterval       = flag.Duration("poll-interval", 20*time.Second, "poll interval")
 	)
 	flag.Parse()
 
 	agent, err := nodeagent.New(nodeagent.Config{
-		PanelURL:         *panelURL,
-		StateDir:         *stateDir,
-		BootstrapToken:   *bootstrapToken,
-		PanelCAFile:      *panelCAFile,
-		PanelFingerprint: *panelFingerprint,
-		SingboxBinary:    *singboxBinary,
-		PollInterval:     *pollInterval,
+		PanelURL:           *panelURL,
+		StateDir:           *stateDir,
+		BootstrapToken:     *bootstrapToken,
+		BootstrapTokenFile: *bootstrapTokenFile,
+		PanelCAFile:        *panelCAFile,
+		PanelFingerprint:   *panelFingerprint,
+		SingboxBinary:      *singboxBinary,
+		PollInterval:       *pollInterval,
 	})
 	if err != nil {
 		log.Fatalf("build node agent: %v", err)

@@ -149,6 +149,7 @@
     <section class="hero">
       <h1>{{ .Portal.Subscription.Name }}</h1>
       <div class="small">Пользователь: {{ .Portal.User.Name }} ({{ .Portal.User.Email }})</div>
+      {{ if .Portal.User.Telegram }}<div class="small" style="margin-top:8px;">Telegram: {{ .Portal.User.Telegram }}</div>{{ end }}
       <div class="small" style="margin-top:8px;">Действует до {{ .Portal.Subscription.ExpiresAt.Format "02.01.2006 15:04 UTC" }}</div>
       <div style="margin-top:14px;"><span class="pill">{{ statusLabel .Portal.Subscription.Status }}</span></div>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;">
