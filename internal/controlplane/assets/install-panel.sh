@@ -143,6 +143,7 @@ install_docker_if_missing() {
 }
 
 ensure_docker_running() {
+  DOCKER_PREFIX=()
   if docker info >/dev/null 2>&1; then
     return
   fi
@@ -153,19 +154,26 @@ ensure_docker_running() {
     run_privileged service docker start || true
   fi
 
-  if ! docker info >/dev/null 2>&1; then
-    error "Docker установлен, но демон недоступен. Проверь service docker status"
-    exit 1
+  if docker info >/dev/null 2>&1; then
+    return
   fi
+
+  if has_cmd sudo && sudo docker info >/dev/null 2>&1; then
+    DOCKER_PREFIX=("sudo")
+    return
+  fi
+
+  error "Docker установлен, но недоступен текущему пользователю. Запусти скрипт через sudo или добавь пользователя в группу docker"
+  exit 1
 }
 
 set_compose_cmd() {
-  if docker compose version >/dev/null 2>&1; then
-    COMPOSE_CMD=("docker" "compose")
+  if "${DOCKER_PREFIX[@]}" docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD=("${DOCKER_PREFIX[@]}" "docker" "compose")
     return
   fi
   if has_cmd docker-compose; then
-    COMPOSE_CMD=("docker-compose")
+    COMPOSE_CMD=("${DOCKER_PREFIX[@]}" "docker-compose")
     return
   fi
   error "Не найден ни docker compose, ни docker-compose"
@@ -205,6 +213,7 @@ SINGBOX_IMAGE="${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
 SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
 EXISTING_ACTION=""
 COMPOSE_CMD=()
+DOCKER_PREFIX=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

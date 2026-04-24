@@ -144,6 +144,7 @@ install_docker_if_missing() {
 }
 
 ensure_docker_running() {
+  DOCKER_PREFIX=()
   if docker info >/dev/null 2>&1; then
     return
   fi
@@ -154,19 +155,26 @@ ensure_docker_running() {
     run_privileged service docker start || true
   fi
 
-  if ! docker info >/dev/null 2>&1; then
-    error "Docker установлен, но демон недоступен. Проверь service docker status"
-    exit 1
+  if docker info >/dev/null 2>&1; then
+    return
   fi
+
+  if has_cmd sudo && sudo docker info >/dev/null 2>&1; then
+    DOCKER_PREFIX=("sudo")
+    return
+  fi
+
+  error "Docker установлен, но недоступен текущему пользователю. Запусти скрипт через sudo или добавь пользователя в группу docker"
+  exit 1
 }
 
 set_compose_cmd() {
-  if docker compose version >/dev/null 2>&1; then
-    COMPOSE_CMD=("docker" "compose")
+  if "${DOCKER_PREFIX[@]}" docker compose version >/dev/null 2>&1; then
+    COMPOSE_CMD=("${DOCKER_PREFIX[@]}" "docker" "compose")
     return
   fi
   if has_cmd docker-compose; then
-    COMPOSE_CMD=("docker-compose")
+    COMPOSE_CMD=("${DOCKER_PREFIX[@]}" "docker-compose")
     return
   fi
   error "Не найден ни docker compose, ни docker-compose"
@@ -183,7 +191,7 @@ download_ca() {
       error "Для ручного режима нужен --panel-ca-inline"
       exit 1
     fi
-    printf "%s\n" "$PANEL_CA_INLINE" >"$PANEL_CA_FILE"
+    printf "%b\n" "$PANEL_CA_INLINE" >"$PANEL_CA_FILE"
     success "CA сертификат сохранён из ручного ввода"
     return
   fi
@@ -244,6 +252,7 @@ SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
 CA_MODE="${CA_MODE:-auto}"
 EXISTING_ACTION=""
 COMPOSE_CMD=()
+DOCKER_PREFIX=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -272,7 +281,7 @@ prompt PANEL_URL "URL панели" "https://panel.example.com:8443"
 prompt BOOTSTRAP_TOKEN "Bootstrap token ноды"
 
 if [[ "$CA_MODE" == "manual" ]]; then
-  prompt PANEL_CA_INLINE "Вставь PEM сертификат панели одной строкой с \\n или через переменную PANEL_CA_INLINE"
+  prompt PANEL_CA_INLINE "Вставь PEM сертификат панели. Поддерживаются реальные переводы строк и последовательности \\n"
 else
   prompt PANEL_FINGERPRINT "SHA-256 fingerprint CA панели"
 fi
