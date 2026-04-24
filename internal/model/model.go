@@ -1,0 +1,117 @@
+package model
+
+import "time"
+
+type Node struct {
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Address        string    `json:"address"`
+	IsLocal        bool      `json:"is_local"`
+	Role           string    `json:"role"`
+	EnrollToken    string    `json:"enroll_token,omitempty"`
+	Status         string    `json:"status"`
+	LastHeartbeat  time.Time `json:"last_heartbeat"`
+	LastSeenIP     string    `json:"last_seen_ip"`
+	ActiveRevision int       `json:"active_revision"`
+	LastApplyError string    `json:"last_apply_error"`
+	CertSerial     string    `json:"cert_serial"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type User struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Email      string    `json:"email"`
+	AccessKey  string    `json:"access_key"`
+	CreatedAt  time.Time `json:"created_at"`
+	ModifiedAt time.Time `json:"modified_at"`
+}
+
+type Subscription struct {
+	ID         string    `json:"id"`
+	UserID     string    `json:"user_id"`
+	Name       string    `json:"name"`
+	Status     string    `json:"status"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Token      string    `json:"token,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	ModifiedAt time.Time `json:"modified_at"`
+}
+
+type InboundProfile struct {
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Protocol      string            `json:"protocol"`
+	ListenHost    string            `json:"listen_host"`
+	ListenPort    int               `json:"listen_port"`
+	Transport     string            `json:"transport"`
+	ServerName    string            `json:"server_name"`
+	PublicHost    string            `json:"public_host"`
+	Path          string            `json:"path"`
+	Password      string            `json:"password"`
+	RealityPubKey string            `json:"reality_public_key"`
+	RealityShort  string            `json:"reality_short_id"`
+	TLSMode       string            `json:"tls_mode"`
+	Metadata      map[string]string `json:"metadata"`
+	CreatedAt     time.Time         `json:"created_at"`
+	ModifiedAt    time.Time         `json:"modified_at"`
+}
+
+type NodeInboundBinding struct {
+	ID               string    `json:"id"`
+	NodeID           string    `json:"node_id"`
+	InboundProfileID string    `json:"inbound_profile_id"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+type TopologyLink struct {
+	ID           string    `json:"id"`
+	SourceNodeID string    `json:"source_node_id"`
+	TargetNodeID string    `json:"target_node_id"`
+	Role         string    `json:"role"`
+	Transport    string    `json:"transport"`
+	ListenPort   int       `json:"listen_port"`
+	EndpointHost string    `json:"endpoint_host"`
+	EndpointPort int       `json:"endpoint_port"`
+	AllowedCIDRs string    `json:"allowed_cidrs"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type RoutingPolicy struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Mode        string    `json:"mode"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type ConfigRevision struct {
+	ID         string    `json:"id"`
+	NodeID     string    `json:"node_id"`
+	Revision   int       `json:"revision"`
+	ConfigJSON string    `json:"config_json"`
+	ConfigHash string    `json:"config_hash"`
+	Applied    bool      `json:"applied"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type AuditEvent struct {
+	ID         string    `json:"id"`
+	Actor      string    `json:"actor"`
+	Action     string    `json:"action"`
+	TargetType string    `json:"target_type"`
+	TargetID   string    `json:"target_id"`
+	Details    string    `json:"details"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type Dashboard struct {
+	Nodes         []Node
+	Users         []User
+	Subscriptions []Subscription
+	Inbounds      []InboundProfile
+	Bindings      []NodeInboundBinding
+	TopologyLinks []TopologyLink
+	Revisions     []ConfigRevision
+}

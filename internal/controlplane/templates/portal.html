@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ .Portal.Subscription.Name }} · портал</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080b11;
+      --panel: rgba(16, 24, 37, 0.9);
+      --panel-strong: rgba(19, 30, 47, 0.96);
+      --line: rgba(146, 170, 201, 0.18);
+      --text: #edf3ff;
+      --muted: #93a5c0;
+      --accent: #62d0a7;
+      --accent-2: #6ca6ff;
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      font-family: "Manrope", "IBM Plex Sans", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(108, 166, 255, 0.16), transparent 30%),
+        radial-gradient(circle at top right, rgba(98, 208, 167, 0.14), transparent 24%),
+        linear-gradient(180deg, #07090e 0%, #0b1018 55%, #070b12 100%);
+    }
+
+    a { color: var(--accent-2); text-decoration: none; }
+    a:hover { color: #9bc0ff; }
+
+    main {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+
+    .hero,
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: linear-gradient(180deg, var(--panel), rgba(11, 17, 26, 0.96));
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .hero {
+      padding: 24px;
+      margin-bottom: 18px;
+      background:
+        radial-gradient(circle at top right, rgba(98, 208, 167, 0.08), transparent 30%),
+        linear-gradient(180deg, var(--panel-strong), rgba(11, 17, 26, 0.98));
+    }
+
+    .card { padding: 22px; margin-bottom: 18px; }
+
+    h1, h2 {
+      margin: 0 0 12px;
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      letter-spacing: 0.02em;
+    }
+
+    .small { color: var(--muted); }
+
+    .mono {
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .pill {
+      display: inline-flex;
+      padding: 7px 11px;
+      border-radius: 999px;
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      font-size: 12px;
+      color: var(--accent);
+      background: rgba(98, 208, 167, 0.12);
+      border: 1px solid rgba(98, 208, 167, 0.24);
+    }
+
+    .list {
+      display: grid;
+      gap: 12px;
+      margin: 16px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .list li {
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(9, 14, 22, 0.8);
+    }
+
+    .link-box {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+      padding: 10px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(108, 166, 255, 0.2);
+      background: rgba(108, 166, 255, 0.08);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <h1>{{ .Portal.Subscription.Name }}</h1>
+      <div class="small">Пользователь: {{ .Portal.User.Name }} ({{ .Portal.User.Email }})</div>
+      <div class="small" style="margin-top:8px;">Действует до {{ .Portal.Subscription.ExpiresAt.Format "02.01.2006 15:04 UTC" }}</div>
+      <div style="margin-top:14px;"><span class="pill">{{ statusLabel .Portal.Subscription.Status }}</span></div>
+      <a class="link-box" href="{{ .FeedURL }}">Ссылка на ленту подписки</a>
+      <div class="mono" style="margin-top:12px;">{{ .PortalURL }}</div>
+    </section>
+
+    <section class="card">
+      <h2>Ручные конфиги</h2>
+      <div class="small">Ссылки формируются по опубликованным привязкам узлов и inbound-профилей.</div>
+      <ul class="list">
+        {{ range .ManualConfig }}
+        <li>
+          <div>{{ .Node.Name }}</div>
+          <div class="mono" style="margin-top:8px;">{{ .URI }}</div>
+        </li>
+        {{ else }}
+        <li>Пока нет опубликованных привязок node ↔ inbound для этой подписки.</li>
+        {{ end }}
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

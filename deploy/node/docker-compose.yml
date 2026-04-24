@@ -1,0 +1,24 @@
+services:
+  node:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.node
+      args:
+        SINGBOX_IMAGE: "${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
+        SINGBOX_BINARY_PATH: "${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
+    image: mgb-node:dev
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - "${NODE_STATE_DIR:-./state/node}:/var/lib/mgb-node"
+      - "${PANEL_CA_FILE:-./state/panel/pki/ca.pem}:/bootstrap/panel-ca.pem:ro"
+    command:
+      - "-panel-url=${PANEL_URL:-https://localhost:8443}"
+      - "-state-dir=/var/lib/mgb-node"
+      - "-bootstrap-token=${BOOTSTRAP_TOKEN:-}"
+      - "-panel-ca-file=/bootstrap/panel-ca.pem"
+      - "-panel-fingerprint=${PANEL_FINGERPRINT:-}"
+      - "-singbox-binary=/usr/local/bin/sing-box"
+      - "-poll-interval=${POLL_INTERVAL:-20s}"

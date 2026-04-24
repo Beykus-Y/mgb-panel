@@ -1,0 +1,1090 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ pageTitle .Page }} · mgb-panel</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080b11;
+      --bg-soft: #0e1420;
+      --panel: rgba(16, 24, 37, 0.88);
+      --panel-strong: rgba(20, 31, 49, 0.96);
+      --panel-alt: rgba(25, 38, 59, 0.9);
+      --line: rgba(146, 170, 201, 0.15);
+      --line-strong: rgba(146, 170, 201, 0.28);
+      --text: #edf3ff;
+      --muted: #92a3be;
+      --accent: #62d0a7;
+      --accent-2: #6ca6ff;
+      --accent-3: #ffbc6d;
+      --danger: #ff7c8f;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
+      --radius-xl: 28px;
+      --radius-lg: 22px;
+      --radius-md: 16px;
+      --radius-sm: 12px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      font-family: "Manrope", "IBM Plex Sans", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(108, 166, 255, 0.18), transparent 28%),
+        radial-gradient(circle at top right, rgba(98, 208, 167, 0.16), transparent 22%),
+        radial-gradient(circle at bottom center, rgba(255, 188, 109, 0.08), transparent 30%),
+        linear-gradient(180deg, #07090e 0%, #0b1018 50%, #070b12 100%);
+    }
+
+    a { color: var(--accent-2); text-decoration: none; }
+    a:hover { color: #9bc0ff; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+      height: 100vh;
+      padding: 28px 22px;
+      border-right: 1px solid var(--line);
+      background:
+        linear-gradient(180deg, rgba(9, 14, 23, 0.96), rgba(11, 17, 28, 0.92)),
+        radial-gradient(circle at top, rgba(98, 208, 167, 0.08), transparent 35%);
+      backdrop-filter: blur(20px);
+    }
+
+    .brand {
+      padding: 18px 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: linear-gradient(180deg, rgba(24, 35, 53, 0.96), rgba(13, 19, 31, 0.98));
+      box-shadow: var(--shadow);
+    }
+
+    .brand strong,
+    .brand span,
+    .metric strong,
+    h1,
+    h2,
+    h3,
+    th,
+    .nav-link,
+    .pill,
+    .kpi strong {
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      letter-spacing: 0.02em;
+    }
+
+    .brand strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 18px;
+    }
+
+    .brand span,
+    .small,
+    .muted {
+      color: var(--muted);
+    }
+
+    .nav {
+      display: grid;
+      gap: 10px;
+    }
+
+    .nav-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      color: var(--text);
+      background: rgba(17, 25, 39, 0.55);
+      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+    }
+
+    .nav-link:hover {
+      transform: translateX(4px);
+      border-color: var(--line);
+      background: rgba(23, 34, 53, 0.8);
+    }
+
+    .nav-link.active {
+      border-color: rgba(98, 208, 167, 0.42);
+      background: linear-gradient(180deg, rgba(26, 42, 61, 0.95), rgba(16, 26, 40, 0.98));
+      box-shadow: inset 0 0 0 1px rgba(98, 208, 167, 0.12);
+    }
+
+    .nav-counter {
+      min-width: 38px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--accent);
+      background: rgba(98, 208, 167, 0.12);
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: rgba(12, 18, 28, 0.9);
+    }
+
+    .mono {
+      font-family: "IBM Plex Mono", "JetBrains Mono", monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .content {
+      padding: 28px;
+    }
+
+    .page-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    .page-head h1 {
+      margin: 0 0 10px;
+      font-size: clamp(28px, 3vw, 42px);
+    }
+
+    .page-head p {
+      max-width: 880px;
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .hero-note {
+      min-width: 260px;
+      padding: 18px;
+      border: 1px solid rgba(108, 166, 255, 0.24);
+      border-radius: var(--radius-lg);
+      background: linear-gradient(180deg, rgba(17, 28, 45, 0.96), rgba(11, 18, 31, 0.98));
+      box-shadow: var(--shadow);
+    }
+
+    .hero-note strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--accent-3);
+      font-size: 14px;
+    }
+
+    .stats,
+    .grid-2,
+    .grid-3 {
+      display: grid;
+      gap: 16px;
+    }
+
+    .stats { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 22px; }
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+    .card,
+    .metric,
+    .kpi {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      background: linear-gradient(180deg, var(--panel), rgba(12, 18, 28, 0.95));
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .card { padding: 24px; }
+    .metric,
+    .kpi { padding: 18px 20px; }
+
+    .metric strong,
+    .kpi strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 30px;
+    }
+
+    .metric span,
+    .kpi span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .section-title h2,
+    .section-title h3,
+    .card h2,
+    .card h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .stack { display: grid; gap: 16px; }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(10, 15, 23, 0.78);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 720px;
+    }
+
+    th, td {
+      padding: 14px 16px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid rgba(146, 170, 201, 0.1);
+    }
+
+    tr:last-child td { border-bottom: none; }
+    th { color: #c9d7ee; font-size: 12px; text-transform: uppercase; }
+    td { color: #e4ebf8; font-size: 14px; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid transparent;
+    }
+
+    .status-pending,
+    .state-false {
+      color: var(--accent-3);
+      background: rgba(255, 188, 109, 0.12);
+      border-color: rgba(255, 188, 109, 0.24);
+    }
+
+    .status-healthy,
+    .state-true {
+      color: var(--accent);
+      background: rgba(98, 208, 167, 0.12);
+      border-color: rgba(98, 208, 167, 0.24);
+    }
+
+    .status-error {
+      color: var(--danger);
+      background: rgba(255, 124, 143, 0.12);
+      border-color: rgba(255, 124, 143, 0.26);
+    }
+
+    .status-inactive {
+      color: #a4b4cf;
+      background: rgba(164, 180, 207, 0.12);
+      border-color: rgba(164, 180, 207, 0.22);
+    }
+
+    .tag {
+      display: inline-flex;
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--accent-2);
+      background: rgba(108, 166, 255, 0.12);
+      border: 1px solid rgba(108, 166, 255, 0.24);
+    }
+
+    .list {
+      display: grid;
+      gap: 12px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .list li {
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(11, 17, 26, 0.8);
+    }
+
+    form {
+      display: grid;
+      gap: 14px;
+    }
+
+    .form-grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+    }
+
+    label {
+      color: #d6e1f4;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    input,
+    select,
+    button {
+      width: 100%;
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      padding: 12px 14px;
+      color: var(--text);
+      background: rgba(12, 18, 28, 0.92);
+      font: inherit;
+    }
+
+    input::placeholder { color: #687a96; }
+
+    input:focus,
+    select:focus {
+      outline: none;
+      border-color: rgba(98, 208, 167, 0.52);
+      box-shadow: 0 0 0 4px rgba(98, 208, 167, 0.12);
+    }
+
+    .checkbox {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .checkbox input {
+      width: 18px;
+      height: 18px;
+      padding: 0;
+    }
+
+    button {
+      cursor: pointer;
+      border: none;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      background: linear-gradient(135deg, #62d0a7, #5c8fff);
+      color: #04111c;
+    }
+
+    button:hover {
+      filter: brightness(1.06);
+      transform: translateY(-1px);
+    }
+
+    .inline-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .endpoint {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      background: rgba(108, 166, 255, 0.08);
+      border: 1px solid rgba(108, 166, 255, 0.16);
+    }
+
+    .empty {
+      padding: 16px 18px;
+      border: 1px dashed rgba(146, 170, 201, 0.26);
+      border-radius: 16px;
+      color: var(--muted);
+      background: rgba(12, 18, 28, 0.55);
+    }
+
+    .api-box {
+      margin-top: 16px;
+      padding: 16px 18px;
+      border: 1px solid rgba(108, 166, 255, 0.2);
+      border-radius: 18px;
+      background: rgba(10, 17, 28, 0.85);
+    }
+
+    [hidden] { display: none !important; }
+
+    @media (max-width: 1080px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar {
+        position: static;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+      }
+      .content { padding-top: 20px; }
+    }
+
+    @media (max-width: 720px) {
+      .content,
+      .sidebar { padding: 18px; }
+      .page-head { flex-direction: column; }
+      .hero-note { min-width: 100%; }
+      .card,
+      .metric,
+      .kpi { border-radius: 22px; }
+      table { min-width: 620px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <section class="brand">
+        <strong>MGB Panel</strong>
+        <span>Структура панели в стиле 3x-ui: каждый раздел живёт на своей странице.</span>
+      </section>
+
+      <nav class="nav">
+        <a class="nav-link {{ if eq .Page "overview" }}active{{ end }}" href="/overview"><span>Обзор</span><span class="nav-counter">•</span></a>
+        <a class="nav-link {{ if eq .Page "inbounds" }}active{{ end }}" href="/inbounds"><span>Инбаунды</span><span class="nav-counter">{{ len .Dashboard.Inbounds }}</span></a>
+        <a class="nav-link {{ if eq .Page "nodes" }}active{{ end }}" href="/nodes"><span>Узлы</span><span class="nav-counter">{{ len .Dashboard.Nodes }}</span></a>
+        <a class="nav-link {{ if eq .Page "users" }}active{{ end }}" href="/users"><span>Пользователи</span><span class="nav-counter">{{ len .Dashboard.Users }}</span></a>
+        <a class="nav-link {{ if eq .Page "subscriptions" }}active{{ end }}" href="/subscriptions"><span>Подписки</span><span class="nav-counter">{{ len .Dashboard.Subscriptions }}</span></a>
+        <a class="nav-link {{ if eq .Page "bindings" }}active{{ end }}" href="/bindings"><span>Привязки</span><span class="nav-counter">{{ len .Dashboard.Bindings }}</span></a>
+        <a class="nav-link {{ if eq .Page "topology" }}active{{ end }}" href="/topology"><span>Топология</span><span class="nav-counter">{{ len .Dashboard.TopologyLinks }}</span></a>
+        <a class="nav-link {{ if eq .Page "revisions" }}active{{ end }}" href="/revisions"><span>Ревизии</span><span class="nav-counter">{{ len .Dashboard.Revisions }}</span></a>
+      </nav>
+
+      <section class="sidebar-footer">
+        <div class="small">CA fingerprint</div>
+        <div class="mono" style="margin:8px 0 14px;">{{ .CAFingerprint }}</div>
+        <div class="small">CA endpoint</div>
+        <div class="mono">{{ .BaseURL }}/api/pki/ca</div>
+      </section>
+    </aside>
+
+    <main class="content">
+      <section class="page-head">
+        <div>
+          <h1>{{ pageTitle .Page }}</h1>
+          <p>{{ pageDescription .Page }}</p>
+        </div>
+        <aside class="hero-note">
+          <strong>Панель управления</strong>
+          <div class="small">HTTPS панель, API, портал и PKI на одной TLS-точке входа.</div>
+        </aside>
+      </section>
+
+      {{ if eq .Page "overview" }}
+      <section class="stats">
+        <div class="metric"><strong>{{ len .Dashboard.Inbounds }}</strong><span>Инбаундов</span></div>
+        <div class="metric"><strong>{{ len .Dashboard.Nodes }}</strong><span>Узлов</span></div>
+        <div class="metric"><strong>{{ len .Dashboard.Users }}</strong><span>Пользователей</span></div>
+        <div class="metric"><strong>{{ len .Dashboard.Subscriptions }}</strong><span>Подписок</span></div>
+        <div class="metric"><strong>{{ len .Dashboard.Bindings }}</strong><span>Привязок</span></div>
+        <div class="metric"><strong>{{ len .Dashboard.Revisions }}</strong><span>Ревизий</span></div>
+      </section>
+
+      <section class="grid-2">
+        <article class="card stack">
+          <div class="section-title">
+            <h2>Быстрые переходы</h2>
+            <span class="tag">Стиль 3x-ui</span>
+          </div>
+          <div class="grid-3">
+            <div class="kpi"><strong>Инбаунды</strong><span>Порты, транспорт, TLS/REALITY</span></div>
+            <div class="kpi"><strong>Узлы</strong><span>Статус heartbeat и роли</span></div>
+            <div class="kpi"><strong>Подписки</strong><span>Порталы и feed для клиентов</span></div>
+          </div>
+          <div class="inline-links">
+            <a class="endpoint" href="/inbounds">Открыть инбаунды</a>
+            <a class="endpoint" href="/nodes">Открыть узлы</a>
+            <a class="endpoint" href="/subscriptions">Открыть подписки</a>
+          </div>
+          <div class="api-box">
+            <div class="small">API панели</div>
+            <div class="mono" style="margin-top:10px;">GET/POST /api/admin/nodes</div>
+            <div class="mono">GET/POST /api/admin/users</div>
+            <div class="mono">GET/POST /api/admin/subscriptions</div>
+            <div class="mono">GET/POST /api/admin/inbounds</div>
+            <div class="mono">GET/POST /api/admin/bindings</div>
+            <div class="mono">GET/POST /api/admin/topology</div>
+            <div class="small" style="margin-top:14px;">Bootstrap scripts</div>
+            <div class="mono" style="margin-top:10px;">GET /install/panel.sh</div>
+            <div class="mono">GET /install/node.sh</div>
+          </div>
+        </article>
+
+        <article class="card stack">
+          <div class="section-title">
+            <h2>Последние ревизии</h2>
+            <a href="/revisions">Все ревизии</a>
+          </div>
+          {{ if .Dashboard.Revisions }}
+          <ul class="list">
+            {{ range .Dashboard.Revisions }}
+            <li>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;">
+                <strong>{{ index $.NodeNames .NodeID }}</strong>
+                <span class="pill state-{{ .Applied }}">{{ if .Applied }}Применена{{ else }}Ожидает применения{{ end }}</span>
+              </div>
+              <div class="small">Ревизия {{ .Revision }} · {{ formatDateTime .CreatedAt }}</div>
+              <div class="mono" style="margin-top:8px;">{{ .ConfigHash }}</div>
+            </li>
+            {{ end }}
+          </ul>
+          {{ else }}
+          <div class="empty">Ревизий пока нет. Они появятся после первой генерации конфигурации для узлов.</div>
+          {{ end }}
+        </article>
+      </section>
+      {{ end }}
+
+      {{ if eq .Page "nodes" }}
+      <section class="grid-2">
+        <article class="card stack">
+          <div class="section-title">
+            <h2>Список узлов</h2>
+            <span class="tag">{{ len .Dashboard.Nodes }} записей</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <tr><th>Узел</th><th>Адрес</th><th>Роль</th><th>Статус</th><th>Bootstrap</th></tr>
+              {{ range .Dashboard.Nodes }}
+              <tr>
+                <td>
+                  <div>{{ .Name }}</div>
+                  <div class="mono">{{ .ID }}</div>
+                  {{ if .IsLocal }}<div class="small">Локальный узел панели</div>{{ end }}
+                </td>
+                <td>
+                  <div>{{ if .Address }}{{ .Address }}{{ else }}<span class="small">Не задан</span>{{ end }}</div>
+                  <div class="small" style="margin-top:8px;">Последний source IP: {{ if .LastSeenIP }}{{ .LastSeenIP }}{{ else }}неизвестно{{ end }}</div>
+                </td>
+                <td>
+                  <span class="tag">{{ roleLabel .Role }}</span>
+                  <div class="small" style="margin-top:8px;">Текущая ревизия: {{ .ActiveRevision }}</div>
+                </td>
+                <td>
+                  <span class="pill status-{{ .Status }}">{{ statusLabel .Status }}</span>
+                  <div class="small" style="margin-top:8px;">Heartbeat: {{ formatDateTime .LastHeartbeat }}</div>
+                  {{ if .LastApplyError }}<div class="small" style="margin-top:8px;color:var(--danger);">{{ .LastApplyError }}</div>{{ end }}
+                </td>
+                <td>
+                  <div class="mono">{{ .EnrollToken }}</div>
+                  <div class="inline-links" style="margin-top:10px;">
+                    <a class="endpoint" href="/api/pki/ca">Скачать CA</a>
+                  </div>
+                  <div class="mono" style="margin-top:10px;">{{ nodeInstallCommand $.BaseURL .EnrollToken $.CAFingerprint }}</div>
+                </td>
+              </tr>
+              {{ else }}
+              <tr><td colspan="5">Узлы ещё не созданы.</td></tr>
+              {{ end }}
+            </table>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="section-title">
+            <h2>Новый узел</h2>
+            <span class="small">Адрес задаётся сразу, затем панель выдаёт токен, CA и install-команду</span>
+          </div>
+          <form method="post" action="/admin/nodes">
+            <input type="hidden" name="redirect_to" value="/nodes">
+            <div class="field">
+              <label for="node-name">Название</label>
+              <input id="node-name" name="name" placeholder="edge-ru-01" required>
+            </div>
+            <div class="field">
+              <label for="node-address">IP или домен узла</label>
+              <input id="node-address" name="address" placeholder="150.241.74.147" required>
+            </div>
+            <div class="field">
+              <label for="node-role">Роль</label>
+              <select id="node-role" name="role">
+                <option value="edge">Edge</option>
+                <option value="relay">Relay</option>
+                <option value="egress">Egress</option>
+              </select>
+            </div>
+            <label class="checkbox"><input type="checkbox" name="is_local"> Панель запускается на этом же узле</label>
+            <button type="submit">Создать узел</button>
+          </form>
+          <div class="api-box">
+            <div class="small">Установка node-agent</div>
+            <div class="small" style="margin-top:8px;">После создания узла панель покажет готовую bootstrap-команду. Скрипт скачает CA сертификат, проверит отпечаток и поднимет контейнер node-agent.</div>
+          </div>
+        </article>
+      </section>
+      {{ end }}
+
+      {{ if eq .Page "users" }}
+      <section class="grid-2">
+        <article class="card stack">
+          <div class="section-title">
+            <h2>Пользователи</h2>
+            <span class="tag">{{ len .Dashboard.Users }} записей</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <tr><th>Имя</th><th>Email</th><th>Ключ доступа</th><th>Создан</th></tr>
+              {{ range .Dashboard.Users }}
+              <tr>
+                <td>
+                  <div>{{ .Name }}</div>
+                  <div class="mono">{{ .ID }}</div>
+                </td>
+                <td>{{ .Email }}</td>
+                <td class="mono">{{ .AccessKey }}</td>
+                <td>{{ formatDateTime .CreatedAt }}</td>
+              </tr>
+              {{ else }}
+              <tr><td colspan="4">Пользователей пока нет.</td></tr>
+              {{ end }}
+            </table>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="section-title">
+            <h2>Новый пользователь</h2>
+            <span class="small">Для пользователя будет выпущен ключ доступа</span>
+          </div>
+          <form method="post" action="/admin/users">
+            <input type="hidden" name="redirect_to" value="/users">
+            <div class="field">
+              <label for="user-name">Имя</label>
+              <input id="user-name" name="name" placeholder="Иван" required>
+            </div>
+            <div class="field">
+              <label for="user-email">Email</label>
+              <input id="user-email" name="email" type="email" placeholder="ivan@example.com" required>
+            </div>
+            <button type="submit">Создать пользователя</button>
+          </form>
+        </article>
+      </section>
+      {{ end }}
+
+      {{ if eq .Page "subscriptions" }}
+      <section class="grid-2">
+        <article class="card stack">
+          <div class="section-title">
+            <h2>Подписки</h2>
+            <span class="tag">{{ len .Dashboard.Subscriptions }} записей</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <tr><th>Пользователь</th><th>Подписка</th><th>Срок</th><th>Ссылки</th></tr>
+              {{ range .Dashboard.Subscriptions }}
+              <tr>
+                <td>
+                  <div>{{ index $.UserNames .UserID }}</div>
+                  <div class="mono">{{ .UserID }}</div>
+                </td>
+                <td>
+                  <div>{{ .Name }}</div>
+                  <span class="pill status-{{ .Status }}">{{ statusLabel .Status }}</span>
+                </td>
+                <td>{{ formatDateTime .ExpiresAt }}</td>
+                <td>
+                  <div class="inline-links">
+                    <a class="endpoint" href="/portal/{{ .Token }}">Портал</a>
+                    <a class="endpoint" href="/subscription/{{ .Token }}">Feed</a>
+                  </div>
+                  <div class="mono" style="margin-top:8px;">{{ .Token }}</div>
+                </td>
+              </tr>
+              {{ else }}
+              <tr><td colspan="4">Подписок пока нет.</td></tr>
+              {{ end }}
+            </table>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="section-title">
+            <h2>Новая подписка</h2>
+            <span class="small">Выпуск ссылки на портал и feed</span>
+          </div>
+          <form method="post" action="/admin/subscriptions">
+            <input type="hidden" name="redirect_to" value="/subscriptions">
+            <div class="field">
+              <label for="subscription-user">Пользователь</label>
+              <select id="subscription-user" name="user_id">
+                {{ range .Dashboard.Users }}<option value="{{ .ID }}">{{ .Name }} ({{ .Email }})</option>{{ else }}<option value="">Сначала создайте пользователя</option>{{ end }}
+              </select>
+            </div>
+            <div class="field">
+              <label for="subscription-name">Название плана</label>
+              <input id="subscription-name" name="name" placeholder="default-plan" required>
+            </div>
+            <div class="field">
+              <label for="subscription-days">Срок действия, дней</label>
+              <input id="subscription-days" name="days" value="30">
+            </div>
+            <button type="submit">Выпустить подписку</button>
+          </form>
+        </article>
+      </section>
+      {{ end }}
+
+      {{ if eq .Page "inbounds" }}
+      <section class="grid-2">
+        <article class="card stack">
+          <div class="section-title">
+            <h2>Inbound-профили</h2>
+            <span class="tag">{{ len .Dashboard.Inbounds }} записей</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <tr><th>Профиль</th><th>Протокол</th><th>Транспорт</th><th>TLS</th><th>Публикация</th></tr>
+              {{ range .Dashboard.Inbounds }}
+              <tr>
+                <td>
+                  <div>{{ .Name }}</div>
+                  <div class="mono">{{ .ListenHost }}:{{ .ListenPort }}</div>
+                  <div class="mono">{{ .ID }}</div>
+                </td>
+                <td>
+                  <span class="tag">{{ protocolLabel .Protocol }}</span>
+                  {{ if .Password }}<div class="small" style="margin-top:8px;">Есть пароль/secret</div>{{ end }}
+                </td>
+                <td>
+                  <div>{{ transportLabel .Transport }}</div>
+                  {{ if .Path }}<div class="mono" style="margin-top:8px;">{{ .Path }}</div>{{ end }}
+                </td>
+                <td>
+                  <div>{{ tlsModeLabel .TLSMode }}</div>
+                  {{ if .ServerName }}<div class="small" style="margin-top:8px;">SNI: {{ .ServerName }}</div>{{ end }}
+                  {{ if .RealityPubKey }}<div class="mono" style="margin-top:8px;">pbk: {{ .RealityPubKey }}</div>{{ end }}
+                </td>
+                <td>
+                  <div>{{ .PublicHost }}</div>
+                  {{ if .RealityShort }}<div class="small" style="margin-top:8px;">short id: {{ .RealityShort }}</div>{{ end }}
+                </td>
+              </tr>
+              {{ else }}
+              <tr><td colspan="5">Инбаундов пока нет.</td></tr>
+              {{ end }}
+            </table>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="section-title">
+            <h2>Новый inbound</h2>
+            <span class="small">Списки вместо свободного ввода для режима транспорта и TLS</span>
+          </div>
+          <form method="post" action="/admin/inbounds">
+            <input type="hidden" name="redirect_to" value="/inbounds">
+            <div class="form-grid">
+              <div class="field">
+                <label for="inbound-name">Название</label>
+                <input id="inbound-name" name="name" placeholder="edge-vless-main" required>
+              </div>
+              <div class="field">
+                <label for="inbound-protocol">Протокол</label>
+                <select id="inbound-protocol" name="protocol">
+                  <option value="vless">VLESS</option>
+                  <option value="trojan">Trojan</option>
+                  <option value="hysteria2">Hysteria 2</option>
+                  <option value="shadowsocks">Shadowsocks</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="inbound-host">Адрес прослушивания</label>
+                <input id="inbound-host" name="listen_host" value="::">
+              </div>
+              <div class="field">
+                <label for="inbound-port">Порт</label>
+                <input id="inbound-port" name="listen_port" value="443">
+              </div>
+              <div class="field">
+                <label for="inbound-transport">Транспорт</label>
+                <select id="inbound-transport" name="transport">
+                  <option value="">Без транспорта</option>
+                  <option value="tcp">TCP</option>
+                  <option value="ws">WebSocket</option>
+                  <option value="grpc">gRPC</option>
+                  <option value="httpupgrade">HTTPUpgrade</option>
+                  <option value="quic">QUIC</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="inbound-tls">Режим TLS</label>
+                <select id="inbound-tls" name="tls_mode">
+                  <option value="">Без TLS</option>
+                  <option value="tls">TLS</option>
+                  <option value="reality">REALITY</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="inbound-server-name">Server name / SNI</label>
+                <input id="inbound-server-name" name="server_name" placeholder="vpn.example.com">
+              </div>
+              <div class="field">
+                <label for="inbound-public-host">Публичный хост</label>
+                <input id="inbound-public-host" name="public_host" placeholder="vpn.example.com">
+              </div>
+              <div class="field" data-toggle="transport=ws,grpc,httpupgrade">
+                <label for="inbound-path">Путь / service name</label>
+                <input id="inbound-path" name="path" placeholder="/connect">
+              </div>
+              <div class="field">
+                <label for="inbound-password">Пароль / общий secret</label>
+                <input id="inbound-password" name="password" placeholder="secret">
+              </div>
+              <div class="field" data-toggle="tls_mode=reality">
+                <label for="inbound-reality-pub">REALITY public key</label>
+                <input id="inbound-reality-pub" name="reality_public_key" placeholder="public key">
+              </div>
+              <div class="field" data-toggle="tls_mode=reality">
+                <label for="inbound-reality-short">REALITY short id</label>
+                <input id="inbound-reality-short" name="reality_short_id" placeholder="abcd1234">
+              </div>
+            </div>
+            <button type="submit">Создать inbound</button>
+          </form>
+        </article>
+      </section>
+      {{ end }}
+
+      {{ if eq .Page "bindings" }}
+      <section class="grid-2">
+        <article class="card stack">
+          <div class="section-title">
+            <h2>Привязки узел → инбаунд</h2>
+            <span class="tag">{{ len .Dashboard.Bindings }} записей</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <tr><th>Узел</th><th>Inbound</th><th>Создано</th></tr>
+              {{ range .Dashboard.Bindings }}
+              <tr>
+                <td>
+                  <div>{{ index $.NodeNames .NodeID }}</div>
+                  <div class="mono">{{ .NodeID }}</div>
+                </td>
+                <td>
+                  <div>{{ index $.InboundNames .InboundProfileID }}</div>
+                  <div class="mono">{{ .InboundProfileID }}</div>
+                </td>
+                <td>{{ formatDateTime .CreatedAt }}</td>
+              </tr>
+              {{ else }}
+              <tr><td colspan="3">Привязок пока нет.</td></tr>
+              {{ end }}
+            </table>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="section-title">
+            <h2>Новая привязка</h2>
+            <span class="small">Публикация inbound на выбранном узле</span>
+          </div>
+          <form method="post" action="/admin/bindings">
+            <input type="hidden" name="redirect_to" value="/bindings">
+            <div class="field">
+              <label for="binding-node">Узел</label>
+              <select id="binding-node" name="node_id">
+                {{ range .Dashboard.Nodes }}<option value="{{ .ID }}">{{ .Name }}</option>{{ else }}<option value="">Нет узлов</option>{{ end }}
+              </select>
+            </div>
+            <div class="field">
+              <label for="binding-inbound">Inbound</label>
+              <select id="binding-inbound" name="inbound_profile_id">
+                {{ range .Dashboard.Inbounds }}<option value="{{ .ID }}">{{ .Name }}</option>{{ else }}<option value="">Нет inbound-профилей</option>{{ end }}
+              </select>
+            </div>
+            <button type="submit">Привязать inbound</button>
+          </form>
+        </article>
+      </section>
+      {{ end }}
+
+      {{ if eq .Page "topology" }}
+      <section class="grid-2">
+        <article class="card stack">
+          <div class="section-title">
+            <h2>Межузловая топология</h2>
+            <span class="tag">{{ len .Dashboard.TopologyLinks }} записей</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <tr><th>Источник</th><th>Назначение</th><th>Роль</th><th>Транспорт</th><th>Маршрут</th></tr>
+              {{ range .Dashboard.TopologyLinks }}
+              <tr>
+                <td>
+                  <div>{{ index $.NodeNames .SourceNodeID }}</div>
+                  <div class="mono">{{ .SourceNodeID }}</div>
+                </td>
+                <td>
+                  <div>{{ index $.NodeNames .TargetNodeID }}</div>
+                  <div class="mono">{{ .TargetNodeID }}</div>
+                </td>
+                <td><span class="tag">{{ roleLabel .Role }}</span></td>
+                <td>
+                  <div>{{ transportLabel .Transport }}</div>
+                  <div class="small" style="margin-top:8px;">listen {{ .ListenPort }}</div>
+                </td>
+                <td>
+                  <div>{{ .EndpointHost }}:{{ .EndpointPort }}</div>
+                  <div class="mono" style="margin-top:8px;">{{ .AllowedCIDRs }}</div>
+                </td>
+              </tr>
+              {{ else }}
+              <tr><td colspan="5">Топология ещё не задана.</td></tr>
+              {{ end }}
+            </table>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="section-title">
+            <h2>Новая связь</h2>
+            <span class="small">Сейчас межузловой транспорт панели ориентирован на WireGuard</span>
+          </div>
+          <form method="post" action="/admin/topology">
+            <input type="hidden" name="redirect_to" value="/topology">
+            <div class="form-grid">
+              <div class="field">
+                <label for="topology-source">Исходный узел</label>
+                <select id="topology-source" name="source_node_id">
+                  {{ range .Dashboard.Nodes }}<option value="{{ .ID }}">{{ .Name }}</option>{{ else }}<option value="">Нет узлов</option>{{ end }}
+                </select>
+              </div>
+              <div class="field">
+                <label for="topology-target">Целевой узел</label>
+                <select id="topology-target" name="target_node_id">
+                  {{ range .Dashboard.Nodes }}<option value="{{ .ID }}">{{ .Name }}</option>{{ else }}<option value="">Нет узлов</option>{{ end }}
+                </select>
+              </div>
+              <div class="field">
+                <label for="topology-role">Роль связи</label>
+                <select id="topology-role" name="role">
+                  <option value="relay">Relay</option>
+                  <option value="egress">Egress</option>
+                  <option value="backup">Резерв</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="topology-transport">Транспорт</label>
+                <select id="topology-transport" name="transport">
+                  <option value="wireguard">WireGuard</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="topology-endpoint-host">Хост endpoint</label>
+                <input id="topology-endpoint-host" name="endpoint_host" placeholder="target.example.com">
+              </div>
+              <div class="field">
+                <label for="topology-endpoint-port">Порт endpoint</label>
+                <input id="topology-endpoint-port" name="endpoint_port" value="51820">
+              </div>
+              <div class="field">
+                <label for="topology-listen-port">Локальный listen port</label>
+                <input id="topology-listen-port" name="listen_port" value="51820">
+              </div>
+              <div class="field">
+                <label for="topology-cidrs">Allowed CIDRs</label>
+                <input id="topology-cidrs" name="allowed_cidrs" value="0.0.0.0/0, ::/0">
+              </div>
+            </div>
+            <button type="submit">Создать связь</button>
+          </form>
+        </article>
+      </section>
+      {{ end }}
+
+      {{ if eq .Page "revisions" }}
+      <section class="card stack">
+        <div class="section-title">
+          <h2>История ревизий</h2>
+          <span class="tag">{{ len .Dashboard.Revisions }} записей</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <tr><th>Узел</th><th>Ревизия</th><th>Статус</th><th>Хеш</th><th>Создано</th></tr>
+            {{ range .Dashboard.Revisions }}
+            <tr>
+              <td>
+                <div>{{ index $.NodeNames .NodeID }}</div>
+                <div class="mono">{{ .NodeID }}</div>
+              </td>
+              <td>{{ .Revision }}</td>
+              <td><span class="pill state-{{ .Applied }}">{{ if .Applied }}Применена{{ else }}Ожидает применения{{ end }}</span></td>
+              <td class="mono">{{ .ConfigHash }}</td>
+              <td>{{ formatDateTime .CreatedAt }}</td>
+            </tr>
+            {{ else }}
+            <tr><td colspan="5">Ревизий пока нет.</td></tr>
+            {{ end }}
+          </table>
+        </div>
+      </section>
+      {{ end }}
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      const groups = document.querySelectorAll("[data-toggle]");
+      if (!groups.length) return;
+
+      function refresh() {
+        groups.forEach(function (group) {
+          const rule = group.dataset.toggle || "";
+          const parts = rule.split("=");
+          if (parts.length !== 2) return;
+
+          const name = parts[0];
+          const accepted = parts[1].split(",");
+          const control = document.querySelector('[name="' + name + '"]');
+          const show = control && accepted.indexOf(control.value) !== -1;
+
+          group.hidden = !show;
+          group.querySelectorAll("input, select").forEach(function (field) {
+            field.disabled = !show;
+          });
+        });
+      }
+
+      document.querySelectorAll("select").forEach(function (control) {
+        control.addEventListener("change", refresh);
+      });
+
+      refresh();
+    })();
+  </script>
+</body>
+</html>
