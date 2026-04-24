@@ -16,5 +16,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /var/lib/mgb-panel
 COPY --from=builder /out/panel /usr/local/bin/panel
 COPY --from=singbox ${SINGBOX_BINARY_PATH} /usr/local/bin/sing-box
+RUN chmod +x /usr/local/bin/sing-box
 EXPOSE 8443
 ENTRYPOINT ["panel"]

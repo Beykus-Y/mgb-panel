@@ -978,14 +978,16 @@ func (s *Server) handleEnableLocalNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var token string
+	var nodeID, token string
 	for _, n := range dashboard.Nodes {
 		if n.IsLocal {
-			token = n.EnrollToken
+			nodeID = n.ID
 			break
 		}
 	}
-	if token == "" {
+
+	if nodeID == "" {
+		// First time: create the local node (token comes from CreateNode)
 		n, err := s.store.CreateNode(r.Context(), database.CreateNodeParams{
 			Name:    "local-panel",
 			Address: "127.0.0.1",
@@ -997,6 +999,15 @@ func (s *Server) handleEnableLocalNode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		token = n.EnrollToken
+	} else {
+		// Reconnect: always issue a fresh token so re-enrollment works
+		// even if the previous token was already consumed.
+		// If cert files still exist on disk, the agent will skip enrollment anyway.
+		token, err = s.store.IssueEnrollToken(r.Context(), nodeID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	if s.dataDir != "" && s.singboxBin != "" {
@@ -1006,6 +1017,43 @@ func (s *Server) handleEnableLocalNode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.Redirect(w, r, "/nodes", http.StatusSeeOther)
+}
+
+// StartLocalAgentIfPresent checks whether a local node exists in the DB
+// and starts the node-agent goroutine automatically. Call once after the
+// TLS listener is up so the agent can reach the panel over 127.0.0.1.
+func (s *Server) StartLocalAgentIfPresent(ctx context.Context) {
+	if s.dataDir == "" || s.singboxBin == "" {
+		return
+	}
+	nodes, err := s.store.ListNodes(ctx)
+	if err != nil {
+		log.Printf("StartLocalAgentIfPresent: list nodes: %v", err)
+		return
+	}
+	for _, node := range nodes {
+		if !node.IsLocal {
+			continue
+		}
+		// Issue a fresh token so re-enrollment works if cert files were lost.
+		token, err := s.store.IssueEnrollToken(ctx, node.ID)
+		if err != nil {
+			log.Printf("StartLocalAgentIfPresent: issue token: %v", err)
+			return
+		}
+		go func(t string) {
+			// Brief delay: give the TLS listener time to start accepting.
+			select {
+			case <-time.After(2 * time.Second):
+			case <-ctx.Done():
+				return
+			}
+			if err := s.startLocalAgent(t); err != nil {
+				log.Printf("StartLocalAgentIfPresent: start agent: %v", err)
+			}
+		}(token)
+		return
+	}
 }
 
 func (s *Server) startLocalAgent(token string) error {

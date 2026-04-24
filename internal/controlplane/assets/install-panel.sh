@@ -251,8 +251,6 @@ install_docker_if_missing
 ensure_docker_running
 set_compose_cmd
 
-mkdir -p "$INSTALL_DIR" "$PANEL_STATE_DIR"
-
 if has_existing_install; then
   choose_existing_action
   case "$EXISTING_ACTION" in
@@ -266,6 +264,8 @@ if has_existing_install; then
       ;;
   esac
 fi
+
+mkdir -p "$INSTALL_DIR" "$PANEL_STATE_DIR"
 
 ensure_repo
 write_env

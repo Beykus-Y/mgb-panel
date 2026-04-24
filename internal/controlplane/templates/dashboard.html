@@ -699,7 +699,7 @@
                 </td>
               </tr>
               {{ else }}
-              <tr><td colspan="5" class="empty" style="border:none;">Узлы ещё не созданы.</td></tr>
+              <tr><td colspan="5" style="color:var(--muted);">Узлы ещё не созданы.</td></tr>
               {{ end }}
             </table>
           </div>
@@ -756,6 +756,9 @@
             {{ if .LocalNode.LastApplyError }}
             <div class="small" style="margin-top:12px;padding:10px 12px;border-radius:10px;background:rgba(255,124,143,0.08);border:1px solid rgba(255,124,143,0.2);color:var(--danger);">{{ .LocalNode.LastApplyError }}</div>
             {{ end }}
+            <form method="post" action="/admin/nodes/enable-local" style="margin-top:14px;">
+              <button type="submit" style="background:rgba(108,166,255,0.14);color:var(--accent-2);border:1px solid rgba(108,166,255,0.28);">Переподключить агента</button>
+            </form>
             {{ else }}
             <div class="section-title">
               <h2>sing-box на этом сервере</h2>

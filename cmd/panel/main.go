@@ -96,6 +96,9 @@ func main() {
 		}
 	}()
 
+	// Auto-start embedded node-agent if a local node was previously enabled via the UI.
+	server.StartLocalAgentIfPresent(ctx)
+
 	<-ctx.Done()
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()

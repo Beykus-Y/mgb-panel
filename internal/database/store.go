@@ -420,6 +420,27 @@ func (s *Store) EnrollNodeByToken(ctx context.Context, token string) (model.Node
 	return node, nil
 }
 
+// IssueEnrollToken generates a new unused enroll token for the given node.
+// Call this before (re)starting a local agent so a fresh token is always available.
+func (s *Store) IssueEnrollToken(ctx context.Context, nodeID string) (string, error) {
+	token, err := secret.Hex(24)
+	if err != nil {
+		return "", err
+	}
+	tokenID, err := secret.ID("enroll")
+	if err != nil {
+		return "", err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO node_enroll_tokens(id, node_id, token, created_at) VALUES(?, ?, ?, ?)`,
+		tokenID, nodeID, token, time.Now().UTC(),
+	)
+	if err != nil {
+		return "", fmt.Errorf("insert enroll token: %w", err)
+	}
+	return token, nil
+}
+
 func (s *Store) SaveNodeCertificate(ctx context.Context, nodeID, serial, certPEM string, notAfter time.Time) error {
 	id, err := secret.ID("cert")
 	if err != nil {
