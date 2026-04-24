@@ -108,6 +108,40 @@
       border: 1px solid rgba(108, 166, 255, 0.2);
       background: rgba(108, 166, 255, 0.08);
     }
+
+    .copy-btn {
+      display: inline-flex;
+      align-items: center;
+      width: auto;
+      padding: 5px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0;
+      background: rgba(108, 166, 255, 0.1);
+      border: 1px solid rgba(108, 166, 255, 0.22);
+      color: var(--accent-2);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      font-family: inherit;
+    }
+    .copy-btn:hover { background: rgba(108, 166, 255, 0.2); }
+    .copy-btn.copied {
+      color: var(--accent);
+      background: rgba(98, 208, 167, 0.12);
+      border-color: rgba(98, 208, 167, 0.28);
+    }
+
+    .config-uri {
+      margin-top: 8px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .config-uri .mono {
+      flex: 1;
+      word-break: break-all;
+    }
   </style>
 </head>
 <body>
@@ -117,8 +151,11 @@
       <div class="small">Пользователь: {{ .Portal.User.Name }} ({{ .Portal.User.Email }})</div>
       <div class="small" style="margin-top:8px;">Действует до {{ .Portal.Subscription.ExpiresAt.Format "02.01.2006 15:04 UTC" }}</div>
       <div style="margin-top:14px;"><span class="pill">{{ statusLabel .Portal.Subscription.Status }}</span></div>
-      <a class="link-box" href="{{ .FeedURL }}">Ссылка на ленту подписки</a>
-      <div class="mono" style="margin-top:12px;">{{ .PortalURL }}</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;">
+        <a class="link-box" href="{{ .FeedURL }}">Ссылка на ленту подписки</a>
+        <button type="button" class="copy-btn" data-copy="{{ .FeedURL }}">Скопировать ссылку</button>
+      </div>
+      <div class="mono" style="margin-top:12px;font-size:11px;color:var(--muted);">{{ .PortalURL }}</div>
     </section>
 
     <section class="card">
@@ -128,7 +165,10 @@
         {{ range .ManualConfig }}
         <li>
           <div>{{ .Node.Name }}</div>
-          <div class="mono" style="margin-top:8px;">{{ .URI }}</div>
+          <div class="config-uri">
+            <span class="mono">{{ .URI }}</span>
+            <button type="button" class="copy-btn" data-copy="{{ .URI }}">Копировать</button>
+          </div>
         </li>
         {{ else }}
         <li>Пока нет опубликованных привязок node ↔ inbound для этой подписки.</li>
@@ -136,5 +176,34 @@
       </ul>
     </section>
   </main>
+  <script>
+    (function () {
+      function fallbackCopy(text, cb) {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); cb(); } catch (e) {}
+        document.body.removeChild(ta);
+      }
+      document.querySelectorAll("[data-copy]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var text = btn.getAttribute("data-copy");
+          var orig = btn.textContent;
+          function onCopied() {
+            btn.textContent = "Скопировано ✓";
+            btn.classList.add("copied");
+            setTimeout(function () { btn.textContent = orig; btn.classList.remove("copied"); }, 1800);
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(onCopied).catch(function () { fallbackCopy(text, onCopied); });
+          } else {
+            fallbackCopy(text, onCopied);
+          }
+        });
+      });
+    })();
+  </script>
 </body>
 </html>

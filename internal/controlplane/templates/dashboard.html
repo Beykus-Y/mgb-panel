@@ -440,6 +440,91 @@
 
     [hidden] { display: none !important; }
 
+    /* ── Copy button ──────────────────────────────────── */
+    .copy-btn {
+      display: inline-flex;
+      align-items: center;
+      width: auto;
+      padding: 4px 10px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0;
+      background: rgba(108, 166, 255, 0.1);
+      border: 1px solid rgba(108, 166, 255, 0.22);
+      color: var(--accent-2);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .copy-btn:hover {
+      filter: none;
+      transform: none;
+      background: rgba(108, 166, 255, 0.2);
+    }
+    .copy-btn.copied {
+      color: var(--accent);
+      background: rgba(98, 208, 167, 0.12);
+      border-color: rgba(98, 208, 167, 0.28);
+    }
+
+    /* ── Truncated monospace value ────────────────────── */
+    .mono-trunc {
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: inline-block;
+      vertical-align: middle;
+      cursor: default;
+    }
+
+    /* ── Input with inline action button ─────────────── */
+    .input-with-action {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .input-with-action input {
+      flex: 1;
+      width: auto;
+    }
+    .input-action {
+      width: auto;
+      white-space: nowrap;
+      padding: 12px 14px;
+      background: rgba(18, 27, 42, 0.92);
+      border: 1px solid var(--line-strong);
+      color: var(--muted);
+      font-weight: 500;
+      font-size: 13px;
+      border-radius: 14px;
+    }
+    .input-action:hover {
+      filter: none;
+      transform: none;
+      background: rgba(28, 40, 60, 0.92);
+      color: var(--text);
+    }
+
+    /* ── Form section label inside grid ──────────────── */
+    .form-section-label {
+      grid-column: 1 / -1;
+      margin: 8px 0 0;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .form-section-label:first-child {
+      margin-top: 0;
+      padding-top: 0;
+      border-top: none;
+    }
+
     @media (max-width: 1080px) {
       .layout { grid-template-columns: 1fr; }
       .sidebar {
@@ -468,11 +553,11 @@
     <aside class="sidebar">
       <section class="brand">
         <strong>MGB Panel</strong>
-        <span>Структура панели в стиле 3x-ui: каждый раздел живёт на своей странице.</span>
+        <span>Control plane · sing-box</span>
       </section>
 
       <nav class="nav">
-        <a class="nav-link {{ if eq .Page "overview" }}active{{ end }}" href="/overview"><span>Обзор</span><span class="nav-counter">•</span></a>
+        <a class="nav-link {{ if eq .Page "overview" }}active{{ end }}" href="/overview"><span>Обзор</span></a>
         <a class="nav-link {{ if eq .Page "inbounds" }}active{{ end }}" href="/inbounds"><span>Инбаунды</span><span class="nav-counter">{{ len .Dashboard.Inbounds }}</span></a>
         <a class="nav-link {{ if eq .Page "nodes" }}active{{ end }}" href="/nodes"><span>Узлы</span><span class="nav-counter">{{ len .Dashboard.Nodes }}</span></a>
         <a class="nav-link {{ if eq .Page "users" }}active{{ end }}" href="/users"><span>Пользователи</span><span class="nav-counter">{{ len .Dashboard.Users }}</span></a>
@@ -484,9 +569,15 @@
 
       <section class="sidebar-footer">
         <div class="small">CA fingerprint</div>
-        <div class="mono" style="margin:8px 0 14px;">{{ .CAFingerprint }}</div>
+        <div style="display:flex;align-items:center;gap:8px;margin:8px 0 14px;">
+          <span class="mono mono-trunc" style="flex:1;" title="{{ .CAFingerprint }}">{{ .CAFingerprint }}</span>
+          <button type="button" class="copy-btn" data-copy="{{ .CAFingerprint }}">Копировать</button>
+        </div>
         <div class="small">CA endpoint</div>
-        <div class="mono">{{ .BaseURL }}/api/pki/ca</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+          <span class="mono" style="font-size:11px;flex:1;overflow-wrap:anywhere;">{{ .BaseURL }}/api/pki/ca</span>
+          <button type="button" class="copy-btn" data-copy="{{ .BaseURL }}/api/pki/ca">Копировать</button>
+        </div>
       </section>
     </aside>
 
@@ -496,10 +587,6 @@
           <h1>{{ pageTitle .Page }}</h1>
           <p>{{ pageDescription .Page }}</p>
         </div>
-        <aside class="hero-note">
-          <strong>Панель управления</strong>
-          <div class="small">HTTPS панель, API, портал и PKI на одной TLS-точке входа.</div>
-        </aside>
       </section>
 
       {{ if eq .Page "overview" }}
@@ -556,7 +643,7 @@
                 <span class="pill state-{{ .Applied }}">{{ if .Applied }}Применена{{ else }}Ожидает применения{{ end }}</span>
               </div>
               <div class="small">Ревизия {{ .Revision }} · {{ formatDateTime .CreatedAt }}</div>
-              <div class="mono" style="margin-top:8px;">{{ .ConfigHash }}</div>
+              <div style="margin-top:8px;"><span class="mono mono-trunc" title="{{ .ConfigHash }}">{{ .ConfigHash }}</span></div>
             </li>
             {{ end }}
           </ul>
@@ -598,11 +685,14 @@
                   {{ if .LastApplyError }}<div class="small" style="margin-top:8px;color:var(--danger);">{{ .LastApplyError }}</div>{{ end }}
                 </td>
                 <td>
-                  <div class="mono">{{ .EnrollToken }}</div>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span class="mono mono-trunc" title="{{ .EnrollToken }}">{{ .EnrollToken }}</span>
+                    <button type="button" class="copy-btn" data-copy="{{ .EnrollToken }}">Токен</button>
+                  </div>
                   <div class="inline-links" style="margin-top:10px;">
                     <a class="endpoint" href="/api/pki/ca">Скачать CA</a>
+                    <button type="button" class="copy-btn" data-copy="{{ nodeInstallCommand $.BaseURL .EnrollToken $.CAFingerprint }}">Скопировать команду установки</button>
                   </div>
-                  <div class="mono" style="margin-top:10px;">{{ nodeInstallCommand $.BaseURL .EnrollToken $.CAFingerprint }}</div>
                 </td>
               </tr>
               {{ else }}
@@ -663,7 +753,12 @@
                   <div class="mono">{{ .ID }}</div>
                 </td>
                 <td>{{ .Email }}</td>
-                <td class="mono">{{ .AccessKey }}</td>
+                <td>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <span class="mono mono-trunc" title="{{ .AccessKey }}">{{ .AccessKey }}</span>
+                    <button type="button" class="copy-btn" data-copy="{{ .AccessKey }}">Копировать</button>
+                  </div>
+                </td>
                 <td>{{ formatDateTime .CreatedAt }}</td>
               </tr>
               {{ else }}
@@ -719,8 +814,11 @@
                   <div class="inline-links">
                     <a class="endpoint" href="/portal/{{ .Token }}">Портал</a>
                     <a class="endpoint" href="/subscription/{{ .Token }}">Feed</a>
+                    <button type="button" class="copy-btn" data-copy="{{ $.BaseURL }}/subscription/{{ .Token }}">Скопировать feed</button>
                   </div>
-                  <div class="mono" style="margin-top:8px;">{{ .Token }}</div>
+                  <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+                    <span class="mono mono-trunc" title="{{ .Token }}">{{ .Token }}</span>
+                  </div>
                 </td>
               </tr>
               {{ else }}
@@ -749,7 +847,7 @@
             </div>
             <div class="field">
               <label for="subscription-days">Срок действия, дней</label>
-              <input id="subscription-days" name="days" value="30">
+              <input id="subscription-days" name="days" type="number" min="1" max="36500" value="30">
             </div>
             <button type="submit">Выпустить подписку</button>
           </form>
@@ -807,6 +905,7 @@
           <form method="post" action="/admin/inbounds">
             <input type="hidden" name="redirect_to" value="/inbounds">
             <div class="form-grid">
+              <p class="form-section-label">Основное</p>
               <div class="field">
                 <label for="inbound-name">Название</label>
                 <input id="inbound-name" name="name" placeholder="edge-vless-main" required>
@@ -820,14 +919,16 @@
                   <option value="shadowsocks">Shadowsocks</option>
                 </select>
               </div>
+              <p class="form-section-label">Сеть</p>
               <div class="field">
                 <label for="inbound-host">Адрес прослушивания</label>
                 <input id="inbound-host" name="listen_host" value="::">
               </div>
               <div class="field">
                 <label for="inbound-port">Порт</label>
-                <input id="inbound-port" name="listen_port" value="443">
+                <input id="inbound-port" name="listen_port" type="number" min="1" max="65535" value="443">
               </div>
+              <p class="form-section-label">Транспорт и TLS</p>
               <div class="field">
                 <label for="inbound-transport">Транспорт</label>
                 <select id="inbound-transport" name="transport">
@@ -847,6 +948,11 @@
                   <option value="reality">REALITY</option>
                 </select>
               </div>
+              <div class="field" data-toggle="transport=ws,grpc,httpupgrade">
+                <label for="inbound-path">Путь / service name</label>
+                <input id="inbound-path" name="path" placeholder="/connect">
+              </div>
+              <p class="form-section-label">Публикация</p>
               <div class="field">
                 <label for="inbound-server-name">Server name / SNI</label>
                 <input id="inbound-server-name" name="server_name" placeholder="vpn.example.com">
@@ -855,13 +961,13 @@
                 <label for="inbound-public-host">Публичный хост</label>
                 <input id="inbound-public-host" name="public_host" placeholder="vpn.example.com">
               </div>
-              <div class="field" data-toggle="transport=ws,grpc,httpupgrade">
-                <label for="inbound-path">Путь / service name</label>
-                <input id="inbound-path" name="path" placeholder="/connect">
-              </div>
+              <p class="form-section-label">Безопасность</p>
               <div class="field">
                 <label for="inbound-password">Пароль / общий secret</label>
-                <input id="inbound-password" name="password" placeholder="secret">
+                <div class="input-with-action">
+                  <input id="inbound-password" name="password" type="password" placeholder="secret">
+                  <button type="button" class="input-action" onclick="togglePassword('inbound-password', this)">Показать</button>
+                </div>
               </div>
               <div class="field" data-toggle="tls_mode=reality">
                 <label for="inbound-reality-pub">REALITY public key</label>
@@ -1009,11 +1115,11 @@
               </div>
               <div class="field">
                 <label for="topology-endpoint-port">Порт endpoint</label>
-                <input id="topology-endpoint-port" name="endpoint_port" value="51820">
+                <input id="topology-endpoint-port" name="endpoint_port" type="number" min="1" max="65535" value="51820">
               </div>
               <div class="field">
                 <label for="topology-listen-port">Локальный listen port</label>
-                <input id="topology-listen-port" name="listen_port" value="51820">
+                <input id="topology-listen-port" name="listen_port" type="number" min="1" max="65535" value="51820">
               </div>
               <div class="field">
                 <label for="topology-cidrs">Allowed CIDRs</label>
@@ -1043,7 +1149,7 @@
               </td>
               <td>{{ .Revision }}</td>
               <td><span class="pill state-{{ .Applied }}">{{ if .Applied }}Применена{{ else }}Ожидает применения{{ end }}</span></td>
-              <td class="mono">{{ .ConfigHash }}</td>
+              <td><span class="mono mono-trunc" title="{{ .ConfigHash }}">{{ .ConfigHash }}</span></td>
               <td>{{ formatDateTime .CreatedAt }}</td>
             </tr>
             {{ else }}
@@ -1058,19 +1164,72 @@
 
   <script>
     (function () {
-      const groups = document.querySelectorAll("[data-toggle]");
+      // ── Copy to clipboard ────────────────────────────────────
+      document.querySelectorAll("[data-copy]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var text = btn.getAttribute("data-copy");
+          var orig = btn.textContent;
+          function onCopied() {
+            btn.textContent = "Скопировано ✓";
+            btn.classList.add("copied");
+            setTimeout(function () {
+              btn.textContent = orig;
+              btn.classList.remove("copied");
+            }, 1800);
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(onCopied).catch(function () { fallbackCopy(text, onCopied); });
+          } else {
+            fallbackCopy(text, onCopied);
+          }
+        });
+      });
+
+      function fallbackCopy(text, cb) {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); cb(); } catch (e) {}
+        document.body.removeChild(ta);
+      }
+
+      // ── Submit loading state ─────────────────────────────────
+      document.querySelectorAll("form").forEach(function (form) {
+        form.addEventListener("submit", function () {
+          var btn = form.querySelector("button[type=submit]");
+          if (btn) {
+            btn.disabled = true;
+            btn.style.opacity = "0.65";
+            btn.textContent = "Сохранение…";
+          }
+        });
+      });
+
+      // ── Password show/hide toggle ────────────────────────────
+      window.togglePassword = function (fieldId, btn) {
+        var input = document.getElementById(fieldId);
+        if (!input) return;
+        var show = input.type === "password";
+        input.type = show ? "text" : "password";
+        btn.textContent = show ? "Скрыть" : "Показать";
+      };
+
+      // ── Conditional field toggle ─────────────────────────────
+      var groups = document.querySelectorAll("[data-toggle]");
       if (!groups.length) return;
 
       function refresh() {
         groups.forEach(function (group) {
-          const rule = group.dataset.toggle || "";
-          const parts = rule.split("=");
+          var rule = group.dataset.toggle || "";
+          var parts = rule.split("=");
           if (parts.length !== 2) return;
 
-          const name = parts[0];
-          const accepted = parts[1].split(",");
-          const control = document.querySelector('[name="' + name + '"]');
-          const show = control && accepted.indexOf(control.value) !== -1;
+          var name = parts[0];
+          var accepted = parts[1].split(",");
+          var control = document.querySelector('[name="' + name + '"]');
+          var show = control && accepted.indexOf(control.value) !== -1;
 
           group.hidden = !show;
           group.querySelectorAll("input, select").forEach(function (field) {
