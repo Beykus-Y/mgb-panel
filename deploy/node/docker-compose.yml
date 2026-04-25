@@ -1,12 +1,6 @@
 services:
   node:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.node
-      args:
-        SINGBOX_IMAGE: "${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
-        SINGBOX_BINARY_PATH: "${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
-    image: mgb-node:dev
+    image: "${NODE_IMAGE:-ghcr.io/beykus-y/mgb-panel:node-latest}"
     restart: unless-stopped
     network_mode: host
     cap_add:

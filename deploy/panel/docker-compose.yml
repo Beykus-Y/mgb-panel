@@ -1,9 +1,6 @@
 services:
   panel:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.panel
-    image: mgb-panel:dev
+    image: "${PANEL_IMAGE:-ghcr.io/beykus-y/mgb-panel:panel-latest}"
     restart: unless-stopped
     ports:
       - "${PANEL_PORT:-8443}:8443"
@@ -21,13 +18,7 @@ services:
       - "${PANEL_STATE_DIR:-./state/panel}:/var/lib/mgb-panel"
       - "${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro"
   local-node:
-    build:
-      context: ../..
-      dockerfile: Dockerfile.node
-      args:
-        SINGBOX_IMAGE: "${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
-        SINGBOX_BINARY_PATH: "${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
-    image: mgb-node:dev
+    image: "${NODE_IMAGE:-ghcr.io/beykus-y/mgb-panel:node-latest}"
     restart: unless-stopped
     network_mode: host
     cap_add:

@@ -209,14 +209,14 @@ ENABLE_LOCAL_NODE=false
 LOCAL_NODE_TOKEN=
 LOCAL_NODE_STATE_DIR=./state/local-node
 LOCAL_NODE_POLL_INTERVAL=20s
-SINGBOX_IMAGE=ghcr.io/sagernet/sing-box:v1.13.11
-SINGBOX_BINARY_PATH=/usr/local/bin/sing-box
+PANEL_IMAGE=ghcr.io/beykus-y/mgb-panel:panel-latest
+NODE_IMAGE=ghcr.io/beykus-y/mgb-panel:node-latest
 ```
 
 Запуск:
 
 ```bash
-docker compose --env-file .env up -d --build
+docker compose --env-file .env up -d
 docker compose --env-file .env logs -f panel
 ```
 
@@ -236,8 +236,7 @@ PANEL_CA_FILE=./bootstrap/panel-ca.pem
 BOOTSTRAP_TOKEN=PASTE_NODE_BOOTSTRAP_TOKEN
 PANEL_FINGERPRINT=PASTE_PANEL_CA_SHA256
 POLL_INTERVAL=20s
-SINGBOX_IMAGE=ghcr.io/sagernet/sing-box:v1.13.11
-SINGBOX_BINARY_PATH=/usr/local/bin/sing-box
+NODE_IMAGE=ghcr.io/beykus-y/mgb-panel:node-latest
 ```
 
 CA-файл можно скачать с панели и проверить fingerprint:
@@ -251,9 +250,20 @@ openssl x509 -in ./bootstrap/panel-ca.pem -outform DER | sha256sum
 Запуск:
 
 ```bash
-docker compose --env-file .env up -d --build
+docker compose --env-file .env up -d
 docker compose --env-file .env logs -f node
 ```
+
+## Docker Images
+
+GitHub Actions собирает и публикует образы в GitHub Container Registry при push в `main` и при публикации тегов `v*`:
+
+- `ghcr.io/beykus-y/mgb-panel:panel-latest`
+- `ghcr.io/beykus-y/mgb-panel:node-latest`
+- `ghcr.io/beykus-y/mgb-panel:panel-<commit-sha>`
+- `ghcr.io/beykus-y/mgb-panel:node-<commit-sha>`
+
+Pull request'ы только проверяют сборку без публикации образов. Install-скрипты и Docker Compose по умолчанию используют готовые GHCR-образы, поэтому VPS больше не компилирует Go-код локально.
 
 ## Рабочий процесс после деплоя
 

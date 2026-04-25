@@ -295,8 +295,8 @@ ENABLE_LOCAL_NODE="${ENABLE_LOCAL_NODE}"
 LOCAL_NODE_TOKEN="${LOCAL_NODE_TOKEN}"
 LOCAL_NODE_STATE_DIR="${LOCAL_NODE_STATE_DIR}"
 LOCAL_NODE_POLL_INTERVAL="${LOCAL_NODE_POLL_INTERVAL}"
-SINGBOX_IMAGE="${SINGBOX_IMAGE}"
-SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH}"
+PANEL_IMAGE="${PANEL_IMAGE}"
+NODE_IMAGE="${NODE_IMAGE}"
 EOF
 }
 
@@ -341,8 +341,8 @@ load_existing_env() {
       LOCAL_NODE_TOKEN) if [[ -z "$LOCAL_NODE_TOKEN" ]]; then LOCAL_NODE_TOKEN="$value"; fi ;;
       LOCAL_NODE_STATE_DIR) if [[ -z "$LOCAL_NODE_STATE_DIR" ]]; then LOCAL_NODE_STATE_DIR="$value"; fi ;;
       LOCAL_NODE_POLL_INTERVAL) if [[ -z "$LOCAL_NODE_POLL_INTERVAL" ]]; then LOCAL_NODE_POLL_INTERVAL="$value"; fi ;;
-      SINGBOX_IMAGE) if [[ -z "$SINGBOX_IMAGE" ]]; then SINGBOX_IMAGE="$value"; fi ;;
-      SINGBOX_BINARY_PATH) if [[ -z "$SINGBOX_BINARY_PATH" ]]; then SINGBOX_BINARY_PATH="$value"; fi ;;
+      PANEL_IMAGE) if [[ -z "$PANEL_IMAGE" ]]; then PANEL_IMAGE="$value"; fi ;;
+      NODE_IMAGE) if [[ -z "$NODE_IMAGE" ]]; then NODE_IMAGE="$value"; fi ;;
     esac
   done <"$ENV_FILE"
 }
@@ -541,7 +541,8 @@ usage() {
   --local-node-token TOKEN
   --local-node-state-dir PATH
   --local-node-poll-interval DURATION
-  --singbox-image IMAGE
+  --panel-image IMAGE
+  --node-image IMAGE
   --help, -h                   Показать эту справку
 EOF
 }
@@ -563,8 +564,8 @@ ENABLE_LOCAL_NODE="${ENABLE_LOCAL_NODE:-}"
 LOCAL_NODE_TOKEN="${LOCAL_NODE_TOKEN:-}"
 LOCAL_NODE_STATE_DIR="${LOCAL_NODE_STATE_DIR:-}"
 LOCAL_NODE_POLL_INTERVAL="${LOCAL_NODE_POLL_INTERVAL:-}"
-SINGBOX_IMAGE="${SINGBOX_IMAGE:-}"
-SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-}"
+PANEL_IMAGE="${PANEL_IMAGE:-}"
+NODE_IMAGE="${NODE_IMAGE:-}"
 NON_INTERACTIVE="false"
 EXISTING_ACTION=""
 COMPOSE_CMD=()
@@ -589,7 +590,8 @@ while [[ $# -gt 0 ]]; do
     --local-node-token) LOCAL_NODE_TOKEN="$2"; shift 2 ;;
     --local-node-state-dir) LOCAL_NODE_STATE_DIR="$2"; shift 2 ;;
     --local-node-poll-interval) LOCAL_NODE_POLL_INTERVAL="$2"; shift 2 ;;
-    --singbox-image) SINGBOX_IMAGE="$2"; shift 2 ;;
+    --panel-image) PANEL_IMAGE="$2"; shift 2 ;;
+    --node-image) NODE_IMAGE="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) error "Неизвестный аргумент: $1"; usage; exit 1 ;;
   esac
@@ -630,11 +632,11 @@ fi
 if [[ -z "$LOCAL_NODE_POLL_INTERVAL" ]]; then
   LOCAL_NODE_POLL_INTERVAL="20s"
 fi
-if [[ -z "$SINGBOX_IMAGE" ]]; then
-  SINGBOX_IMAGE="ghcr.io/sagernet/sing-box:v1.13.11"
+if [[ -z "$PANEL_IMAGE" ]]; then
+  PANEL_IMAGE="ghcr.io/beykus-y/mgb-panel:panel-latest"
 fi
-if [[ -z "$SINGBOX_BINARY_PATH" ]]; then
-  SINGBOX_BINARY_PATH="/usr/local/bin/sing-box"
+if [[ -z "$NODE_IMAGE" ]]; then
+  NODE_IMAGE="ghcr.io/beykus-y/mgb-panel:node-latest"
 fi
 if [[ -z "$TLS_MODE" ]]; then
   TLS_MODE="$(default_tls_mode)"
@@ -699,7 +701,8 @@ else
 fi
 
 # Поднимаем контейнеры. local-node стартует отдельно от панели и ждёт включения из UI.
-compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
+compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull
+compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d
 
 success "Панель успешно установлена и запущена!"
 printf "\n"

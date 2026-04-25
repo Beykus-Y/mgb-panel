@@ -183,8 +183,7 @@ PANEL_CA_FILE="${PANEL_CA_FILE}"
 BOOTSTRAP_TOKEN="${BOOTSTRAP_TOKEN}"
 PANEL_FINGERPRINT="${PANEL_FINGERPRINT}"
 POLL_INTERVAL="${POLL_INTERVAL}"
-SINGBOX_IMAGE="${SINGBOX_IMAGE}"
-SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH}"
+NODE_IMAGE="${NODE_IMAGE}"
 EOF
 }
 
@@ -201,8 +200,7 @@ load_existing_env() {
       BOOTSTRAP_TOKEN) if [[ -z "$BOOTSTRAP_TOKEN" ]]; then BOOTSTRAP_TOKEN="$value"; fi ;;
       PANEL_FINGERPRINT) if [[ -z "$PANEL_FINGERPRINT" ]]; then PANEL_FINGERPRINT="$value"; fi ;;
       POLL_INTERVAL) if [[ -z "$POLL_INTERVAL" ]]; then POLL_INTERVAL="$value"; fi ;;
-      SINGBOX_IMAGE) if [[ -z "$SINGBOX_IMAGE" ]]; then SINGBOX_IMAGE="$value"; fi ;;
-      SINGBOX_BINARY_PATH) if [[ -z "$SINGBOX_BINARY_PATH" ]]; then SINGBOX_BINARY_PATH="$value"; fi ;;
+      NODE_IMAGE) if [[ -z "$NODE_IMAGE" ]]; then NODE_IMAGE="$value"; fi ;;
     esac
   done <"$ENV_FILE"
 }
@@ -335,7 +333,7 @@ usage() {
   --panel-fingerprint SHA256
   --bootstrap-token TOKEN
   --poll-interval DURATION
-  --singbox-image IMAGE
+  --node-image IMAGE
   --help
 EOF
 }
@@ -349,8 +347,7 @@ PANEL_CA_INLINE="${PANEL_CA_INLINE:-}"
 PANEL_FINGERPRINT="${PANEL_FINGERPRINT:-}"
 BOOTSTRAP_TOKEN="${BOOTSTRAP_TOKEN:-}"
 POLL_INTERVAL="${POLL_INTERVAL:-}"
-SINGBOX_IMAGE="${SINGBOX_IMAGE:-}"
-SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-}"
+NODE_IMAGE="${NODE_IMAGE:-}"
 CA_MODE="${CA_MODE:-auto}"
 EXISTING_ACTION=""
 COMPOSE_CMD=()
@@ -370,7 +367,7 @@ while [[ $# -gt 0 ]]; do
     --panel-fingerprint) PANEL_FINGERPRINT="$2"; shift 2 ;;
     --bootstrap-token) BOOTSTRAP_TOKEN="$2"; shift 2 ;;
     --poll-interval) POLL_INTERVAL="$2"; shift 2 ;;
-    --singbox-image) SINGBOX_IMAGE="$2"; shift 2 ;;
+    --node-image) NODE_IMAGE="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *)
       error "Неизвестный аргумент: $1"
@@ -418,11 +415,8 @@ fi
 if [[ -z "$POLL_INTERVAL" ]]; then
   POLL_INTERVAL="20s"
 fi
-if [[ -z "$SINGBOX_IMAGE" ]]; then
-  SINGBOX_IMAGE="ghcr.io/sagernet/sing-box:v1.13.11"
-fi
-if [[ -z "$SINGBOX_BINARY_PATH" ]]; then
-  SINGBOX_BINARY_PATH="/usr/local/bin/sing-box"
+if [[ -z "$NODE_IMAGE" ]]; then
+  NODE_IMAGE="ghcr.io/beykus-y/mgb-panel:node-latest"
 fi
 
 if ! has_cmd git; then
@@ -471,7 +465,8 @@ if [[ "$EXISTING_ACTION" == "update" ]]; then
 else
   info "Запускаю node-agent через Docker Compose"
 fi
-compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
+compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull
+compose_run --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d
 
 success "Нода установлена"
 printf "\n"
