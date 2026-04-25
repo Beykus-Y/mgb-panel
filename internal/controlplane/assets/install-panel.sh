@@ -118,6 +118,8 @@ write_env() {
 PANEL_PORT=$PANEL_PORT
 PANEL_BASE_URL=$PANEL_BASE_URL
 PANEL_STATE_DIR=$PANEL_STATE_DIR
+ADMIN_USER=$ADMIN_USER
+ADMIN_PASSWORD=$ADMIN_PASSWORD
 ENABLE_LOCAL_NODE=$ENABLE_LOCAL_NODE
 LOCAL_NODE_TOKEN=$LOCAL_NODE_TOKEN
 LOCAL_NODE_STATE_DIR=$LOCAL_NODE_STATE_DIR
@@ -125,6 +127,25 @@ LOCAL_NODE_POLL_INTERVAL=$LOCAL_NODE_POLL_INTERVAL
 SINGBOX_IMAGE=$SINGBOX_IMAGE
 SINGBOX_BINARY_PATH=$SINGBOX_BINARY_PATH
 EOF
+}
+
+load_existing_admin_credentials() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return
+  fi
+  local key value
+  while IFS='=' read -r key value; do
+    value="${value%\"}"
+    value="${value#\"}"
+    case "$key" in
+      ADMIN_USER)
+        if [[ -z "$ADMIN_USER" ]]; then ADMIN_USER="$value"; fi
+        ;;
+      ADMIN_PASSWORD)
+        if [[ -z "$ADMIN_PASSWORD" ]]; then ADMIN_PASSWORD="$value"; fi
+        ;;
+    esac
+  done <"$ENV_FILE"
 }
 
 install_docker_if_missing() {
@@ -217,6 +238,8 @@ usage() {
   --install-dir PATH
   --panel-base-url URL
   --panel-port PORT
+  --admin-user USER
+  --admin-password PASSWORD
   --enable-local-node true|false
   --local-node-token TOKEN
   --local-node-state-dir PATH
@@ -231,6 +254,9 @@ REPO_REF="${REPO_REF:-main}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/mgb-panel}"
 PANEL_BASE_URL="${PANEL_BASE_URL:-}"
 PANEL_PORT="${PANEL_PORT:-8443}"
+ADMIN_USER="${ADMIN_USER:-}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+ADMIN_PASSWORD_WAS_GENERATED="false"
 ENABLE_LOCAL_NODE="${ENABLE_LOCAL_NODE:-false}"
 LOCAL_NODE_TOKEN="${LOCAL_NODE_TOKEN:-}"
 LOCAL_NODE_STATE_DIR="${LOCAL_NODE_STATE_DIR:-}"
@@ -248,6 +274,8 @@ while [[ $# -gt 0 ]]; do
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
     --panel-base-url) PANEL_BASE_URL="$2"; shift 2 ;;
     --panel-port) PANEL_PORT="$2"; shift 2 ;;
+    --admin-user) ADMIN_USER="$2"; shift 2 ;;
+    --admin-password) ADMIN_PASSWORD="$2"; shift 2 ;;
     --enable-local-node) ENABLE_LOCAL_NODE="$2"; shift 2 ;;
     --local-node-token) LOCAL_NODE_TOKEN="$2"; shift 2 ;;
     --local-node-state-dir) LOCAL_NODE_STATE_DIR="$2"; shift 2 ;;
@@ -273,6 +301,15 @@ if [[ -z "$LOCAL_NODE_STATE_DIR" ]]; then
 fi
 ENV_FILE="$INSTALL_DIR/panel.env"
 COMPOSE_FILE="$REPO_DIR/deploy/panel/docker-compose.yml"
+load_existing_admin_credentials
+prompt ADMIN_USER "Логин администратора" "admin"
+if [[ -z "$ADMIN_PASSWORD" ]]; then
+  GENERATED_ADMIN_PASSWORD="$(generate_token)"
+  prompt ADMIN_PASSWORD "Пароль администратора" "$GENERATED_ADMIN_PASSWORD"
+  if [[ "$ADMIN_PASSWORD" == "$GENERATED_ADMIN_PASSWORD" ]]; then
+    ADMIN_PASSWORD_WAS_GENERATED="true"
+  fi
+fi
 
 if ! has_cmd git; then
   error "Команда 'git' не найдена"
@@ -318,4 +355,8 @@ success "Панель установлена"
 printf "\n"
 printf "Каталог установки: %s\n" "$INSTALL_DIR"
 printf "Файл окружения:    %s\n" "$ENV_FILE"
+printf "Логин админки:     %s\n" "$ADMIN_USER"
+if [[ "$ADMIN_PASSWORD_WAS_GENERATED" == "true" ]]; then
+  printf "Пароль админки:    %s\n" "$ADMIN_PASSWORD"
+fi
 printf "Открыть панель:    %s\n" "$PANEL_BASE_URL"

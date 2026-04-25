@@ -13,6 +13,8 @@ services:
       - "-listen=:8443"
       - "-base-url=${PANEL_BASE_URL:-https://localhost:8443}"
       - "-data-dir=/var/lib/mgb-panel"
+      - "-admin-user=${ADMIN_USER:-admin}"
+      - "-admin-password=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
       - "-enable-local-node=${ENABLE_LOCAL_NODE:-false}"
       - "-local-node-token=${LOCAL_NODE_TOKEN:-}"
 

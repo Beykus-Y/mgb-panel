@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -42,6 +43,12 @@ type CreateSubscriptionParams struct {
 	UserID     string
 	Name       string
 	ExpiresAt  time.Time
+	BindingIDs []string
+	PlanIDs    []string
+}
+
+type CreateSubscriptionPlanParams struct {
+	Name       string
 	BindingIDs []string
 }
 
@@ -150,6 +157,26 @@ func (s *Store) migrate(ctx context.Context) error {
 			node_inbound_binding_id TEXT NOT NULL,
 			created_at TIMESTAMP NOT NULL,
 			UNIQUE(subscription_id, node_inbound_binding_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS subscription_plans (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			modified_at TIMESTAMP NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS subscription_plan_binding_items (
+			id TEXT PRIMARY KEY,
+			subscription_plan_id TEXT NOT NULL,
+			node_inbound_binding_id TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			UNIQUE(subscription_plan_id, node_inbound_binding_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS user_subscription_plans (
+			id TEXT PRIMARY KEY,
+			subscription_id TEXT NOT NULL,
+			subscription_plan_id TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			UNIQUE(subscription_id, subscription_plan_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS nodes (
 			id TEXT PRIMARY KEY,
@@ -783,7 +810,25 @@ func (s *Store) ListUsers(ctx context.Context) ([]model.User, error) {
 		}
 		out = append(out, user)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].CurrentSubscriptionID == "" {
+			continue
+		}
+		sub, err := s.currentSubscriptionByUser(ctx, out[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].CurrentSubscriptionName = sub.Name
+		out[i].CurrentSubscriptionPlanIDs = sub.PlanIDs
+		out[i].CurrentSubscriptionPlanNames = sub.PlanNames
+	}
+	return out, nil
 }
 
 func (s *Store) UpdateUser(ctx context.Context, userID string, params CreateUserParams) (model.User, error) {
@@ -839,12 +884,9 @@ func (s *Store) currentSubscriptionByUser(ctx context.Context, userID string) (m
 		}
 		return model.Subscription{}, fmt.Errorf("load current subscription: %w", err)
 	}
-	items, err := s.listSubscriptionBindingItems(ctx, sub.ID)
-	if err != nil {
+	if err := s.hydrateSubscriptionAccess(ctx, &sub); err != nil {
 		return model.Subscription{}, err
 	}
-	sub.Bindings = items
-	sub.BindingCount = len(items)
 	return sub, nil
 }
 
@@ -900,6 +942,10 @@ func (s *Store) listSubscriptionBindingItems(ctx context.Context, subscriptionID
 			n.address,
 			nb.inbound_profile_id,
 			ip.name,
+			ip.protocol,
+			ip.listen_port,
+			ip.transport,
+			ip.tls_mode,
 			COALESCE(NULLIF(ip.public_host, ''), NULLIF(ip.server_name, ''), n.address, n.name)
 		FROM subscription_binding_items sbi
 		JOIN node_inbound_bindings nb ON nb.id = sbi.node_inbound_binding_id
@@ -926,6 +972,10 @@ func (s *Store) listSubscriptionBindingItems(ctx context.Context, subscriptionID
 			&item.NodeAddress,
 			&item.InboundProfileID,
 			&item.InboundName,
+			&item.Protocol,
+			&item.ListenPort,
+			&item.Transport,
+			&item.TLSMode,
 			&item.PublicHost,
 		); err != nil {
 			return nil, fmt.Errorf("scan subscription binding item: %w", err)
@@ -933,6 +983,204 @@ func (s *Store) listSubscriptionBindingItems(ctx context.Context, subscriptionID
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) replaceUserSubscriptionPlans(ctx context.Context, subscriptionID string, planIDs []string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM user_subscription_plans WHERE subscription_id = ?`, subscriptionID); err != nil {
+		return fmt.Errorf("clear user subscription plans: %w", err)
+	}
+
+	now := time.Now().UTC()
+	for _, planID := range dedupeStrings(planIDs) {
+		id, err := secret.ID("usplan")
+		if err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(
+			ctx,
+			`INSERT INTO user_subscription_plans(id, subscription_id, subscription_plan_id, created_at) VALUES(?, ?, ?, ?)`,
+			id,
+			subscriptionID,
+			planID,
+			now,
+		); err != nil {
+			return fmt.Errorf("insert user subscription plan: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) listSubscriptionPlanBindingItems(ctx context.Context, planID string) ([]model.SubscriptionBindingItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			spbi.id,
+			spbi.subscription_plan_id,
+			spbi.node_inbound_binding_id,
+			nb.node_id,
+			n.name,
+			n.address,
+			nb.inbound_profile_id,
+			ip.name,
+			ip.protocol,
+			ip.listen_port,
+			ip.transport,
+			ip.tls_mode,
+			COALESCE(NULLIF(ip.public_host, ''), NULLIF(ip.server_name, ''), n.address, n.name)
+		FROM subscription_plan_binding_items spbi
+		JOIN node_inbound_bindings nb ON nb.id = spbi.node_inbound_binding_id
+		JOIN nodes n ON n.id = nb.node_id
+		JOIN inbound_profiles ip ON ip.id = nb.inbound_profile_id
+		WHERE spbi.subscription_plan_id = ?
+		ORDER BY n.name, ip.name`,
+		planID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list subscription plan binding items: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.SubscriptionBindingItem
+	for rows.Next() {
+		var item model.SubscriptionBindingItem
+		if err := rows.Scan(
+			&item.ID,
+			&item.SubscriptionPlanID,
+			&item.NodeInboundBindingID,
+			&item.NodeID,
+			&item.NodeName,
+			&item.NodeAddress,
+			&item.InboundProfileID,
+			&item.InboundName,
+			&item.Protocol,
+			&item.ListenPort,
+			&item.Transport,
+			&item.TLSMode,
+			&item.PublicHost,
+		); err != nil {
+			return nil, fmt.Errorf("scan subscription plan binding item: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) listSubscriptionPlansForSubscription(ctx context.Context, subscriptionID string) ([]model.SubscriptionPlan, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.id, p.name, p.created_at, p.modified_at
+		FROM user_subscription_plans usp
+		JOIN subscription_plans p ON p.id = usp.subscription_plan_id
+		WHERE usp.subscription_id = ?
+		ORDER BY p.name`,
+		subscriptionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list user subscription plans: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.SubscriptionPlan
+	for rows.Next() {
+		var plan model.SubscriptionPlan
+		if err := rows.Scan(&plan.ID, &plan.Name, &plan.CreatedAt, &plan.ModifiedAt); err != nil {
+			return nil, fmt.Errorf("scan user subscription plan: %w", err)
+		}
+		out = append(out, plan)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		items, err := s.listSubscriptionPlanBindingItems(ctx, out[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Bindings = items
+		out[i].BindingCount = len(items)
+	}
+	return out, nil
+}
+
+func appendUniqueBindingItems(out []model.SubscriptionBindingItem, seen map[string]struct{}, items []model.SubscriptionBindingItem) []model.SubscriptionBindingItem {
+	for _, item := range items {
+		if item.NodeInboundBindingID == "" {
+			continue
+		}
+		if _, ok := seen[item.NodeInboundBindingID]; ok {
+			continue
+		}
+		seen[item.NodeInboundBindingID] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func (s *Store) hydrateSubscriptionAccess(ctx context.Context, sub *model.Subscription) error {
+	directItems, err := s.listSubscriptionBindingItems(ctx, sub.ID)
+	if err != nil {
+		return err
+	}
+	plans, err := s.listSubscriptionPlansForSubscription(ctx, sub.ID)
+	if err != nil {
+		return err
+	}
+
+	seenBindings := make(map[string]struct{})
+	bindings := appendUniqueBindingItems(nil, seenBindings, directItems)
+	planNames := make([]string, 0, len(plans))
+	planIDs := make([]string, 0, len(plans))
+	for _, plan := range plans {
+		planIDs = append(planIDs, plan.ID)
+		planNames = append(planNames, plan.Name)
+		bindings = appendUniqueBindingItems(bindings, seenBindings, plan.Bindings)
+	}
+	if len(planNames) > 0 {
+		sub.Name = strings.Join(planNames, ", ")
+	}
+	sub.PlanIDs = planIDs
+	sub.PlanNames = planNames
+	sub.Plans = plans
+	sub.Bindings = bindings
+	sub.BindingCount = len(bindings)
+	return nil
+}
+
+func (s *Store) subscriptionPlanNamesByID(ctx context.Context, planIDs []string) ([]string, error) {
+	ids := dedupeStrings(planIDs)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(ids))
+	for _, planID := range ids {
+		var name string
+		if err := s.db.QueryRowContext(ctx, `SELECT name FROM subscription_plans WHERE id = ?`, planID).Scan(&name); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return nil, fmt.Errorf("load subscription plan name: %w", err)
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func (s *Store) UpdateUserSubscriptionPlans(ctx context.Context, userID string, planIDs []string, expiresAt time.Time) (model.Subscription, error) {
+	names, err := s.subscriptionPlanNamesByID(ctx, planIDs)
+	if err != nil {
+		return model.Subscription{}, err
+	}
+	name := strings.Join(names, ", ")
+	if name == "" {
+		name = "Без наборов"
+	}
+	return s.CreateSubscription(ctx, CreateSubscriptionParams{
+		UserID:    userID,
+		Name:      name,
+		ExpiresAt: expiresAt,
+		PlanIDs:   planIDs,
+	})
 }
 
 func (s *Store) CreateSubscription(ctx context.Context, params CreateSubscriptionParams) (model.Subscription, error) {
@@ -952,6 +1200,9 @@ func (s *Store) CreateSubscription(ctx context.Context, params CreateSubscriptio
 			return model.Subscription{}, fmt.Errorf("update subscription: %w", err)
 		}
 		if err := s.replaceSubscriptionBindingItems(ctx, current.ID, params.BindingIDs); err != nil {
+			return model.Subscription{}, err
+		}
+		if err := s.replaceUserSubscriptionPlans(ctx, current.ID, params.PlanIDs); err != nil {
 			return model.Subscription{}, err
 		}
 		updated, err := s.currentSubscriptionByUser(ctx, params.UserID)
@@ -1005,6 +1256,9 @@ func (s *Store) CreateSubscription(ctx context.Context, params CreateSubscriptio
 	if err := s.replaceSubscriptionBindingItems(ctx, id, params.BindingIDs); err != nil {
 		return model.Subscription{}, err
 	}
+	if err := s.replaceUserSubscriptionPlans(ctx, id, params.PlanIDs); err != nil {
+		return model.Subscription{}, err
+	}
 	created, err := s.currentSubscriptionByUser(ctx, params.UserID)
 	if err != nil {
 		return model.Subscription{}, err
@@ -1032,7 +1286,100 @@ func (s *Store) ListSubscriptions(ctx context.Context) ([]model.Subscription, er
 		return nil, err
 	}
 	for i := range out {
-		items, err := s.listSubscriptionBindingItems(ctx, out[i].ID)
+		if err := s.hydrateSubscriptionAccess(ctx, &out[i]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) replaceSubscriptionPlanBindingItems(ctx context.Context, planID string, bindingIDs []string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM subscription_plan_binding_items WHERE subscription_plan_id = ?`, planID); err != nil {
+		return fmt.Errorf("clear subscription plan bindings: %w", err)
+	}
+
+	now := time.Now().UTC()
+	for _, bindingID := range dedupeStrings(bindingIDs) {
+		id, err := secret.ID("pbind")
+		if err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(
+			ctx,
+			`INSERT INTO subscription_plan_binding_items(id, subscription_plan_id, node_inbound_binding_id, created_at) VALUES(?, ?, ?, ?)`,
+			id,
+			planID,
+			bindingID,
+			now,
+		); err != nil {
+			return fmt.Errorf("insert subscription plan binding item: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) CreateSubscriptionPlan(ctx context.Context, params CreateSubscriptionPlanParams) (model.SubscriptionPlan, error) {
+	id, err := secret.ID("plan")
+	if err != nil {
+		return model.SubscriptionPlan{}, err
+	}
+	now := time.Now().UTC()
+	_, err = s.db.ExecContext(
+		ctx,
+		`INSERT INTO subscription_plans(id, name, created_at, modified_at) VALUES(?, ?, ?, ?)`,
+		id,
+		params.Name,
+		now,
+		now,
+	)
+	if err != nil {
+		return model.SubscriptionPlan{}, fmt.Errorf("insert subscription plan: %w", err)
+	}
+	if err := s.replaceSubscriptionPlanBindingItems(ctx, id, params.BindingIDs); err != nil {
+		return model.SubscriptionPlan{}, err
+	}
+	_ = s.Audit(ctx, "admin", "create", "subscription_plan", id, params.Name)
+	return s.GetSubscriptionPlan(ctx, id)
+}
+
+func (s *Store) GetSubscriptionPlan(ctx context.Context, planID string) (model.SubscriptionPlan, error) {
+	var plan model.SubscriptionPlan
+	row := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, modified_at FROM subscription_plans WHERE id = ?`, planID)
+	if err := row.Scan(&plan.ID, &plan.Name, &plan.CreatedAt, &plan.ModifiedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.SubscriptionPlan{}, ErrNotFound
+		}
+		return model.SubscriptionPlan{}, fmt.Errorf("load subscription plan: %w", err)
+	}
+	items, err := s.listSubscriptionPlanBindingItems(ctx, plan.ID)
+	if err != nil {
+		return model.SubscriptionPlan{}, err
+	}
+	plan.Bindings = items
+	plan.BindingCount = len(items)
+	return plan, nil
+}
+
+func (s *Store) ListSubscriptionPlans(ctx context.Context) ([]model.SubscriptionPlan, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, created_at, modified_at FROM subscription_plans ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list subscription plans: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.SubscriptionPlan
+	for rows.Next() {
+		var plan model.SubscriptionPlan
+		if err := rows.Scan(&plan.ID, &plan.Name, &plan.CreatedAt, &plan.ModifiedAt); err != nil {
+			return nil, fmt.Errorf("scan subscription plan: %w", err)
+		}
+		out = append(out, plan)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		items, err := s.listSubscriptionPlanBindingItems(ctx, out[i].ID)
 		if err != nil {
 			return nil, err
 		}
@@ -1040,6 +1387,40 @@ func (s *Store) ListSubscriptions(ctx context.Context) ([]model.Subscription, er
 		out[i].BindingCount = len(items)
 	}
 	return out, nil
+}
+
+func (s *Store) UpdateSubscriptionPlan(ctx context.Context, planID string, params CreateSubscriptionPlanParams) (model.SubscriptionPlan, error) {
+	now := time.Now().UTC()
+	res, err := s.db.ExecContext(ctx, `UPDATE subscription_plans SET name = ?, modified_at = ? WHERE id = ?`, params.Name, now, planID)
+	if err != nil {
+		return model.SubscriptionPlan{}, fmt.Errorf("update subscription plan: %w", err)
+	}
+	if affected, err := res.RowsAffected(); err == nil && affected == 0 {
+		return model.SubscriptionPlan{}, ErrNotFound
+	}
+	if err := s.replaceSubscriptionPlanBindingItems(ctx, planID, params.BindingIDs); err != nil {
+		return model.SubscriptionPlan{}, err
+	}
+	_ = s.Audit(ctx, "admin", "update", "subscription_plan", planID, params.Name)
+	return s.GetSubscriptionPlan(ctx, planID)
+}
+
+func (s *Store) DeleteSubscriptionPlan(ctx context.Context, planID string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM user_subscription_plans WHERE subscription_plan_id = ?`, planID); err != nil {
+		return fmt.Errorf("delete user subscription plan links: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM subscription_plan_binding_items WHERE subscription_plan_id = ?`, planID); err != nil {
+		return fmt.Errorf("delete subscription plan bindings: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM subscription_plans WHERE id = ?`, planID)
+	if err != nil {
+		return fmt.Errorf("delete subscription plan: %w", err)
+	}
+	if affected, err := res.RowsAffected(); err == nil && affected == 0 {
+		return ErrNotFound
+	}
+	_ = s.Audit(ctx, "admin", "delete", "subscription_plan", planID, "")
+	return nil
 }
 
 func (s *Store) UpdateUserSubscription(ctx context.Context, userID, name string, expiresAt time.Time) (model.Subscription, error) {
@@ -1317,7 +1698,7 @@ func (s *Store) Dashboard(ctx context.Context) (model.Dashboard, error) {
 	if err != nil {
 		return model.Dashboard{}, err
 	}
-	subs, err := s.ListSubscriptions(ctx)
+	subs, err := s.ListSubscriptionPlans(ctx)
 	if err != nil {
 		return model.Dashboard{}, err
 	}
@@ -1387,12 +1768,10 @@ func (s *Store) PortalDataByToken(ctx context.Context, token string) (PortalData
 		return PortalData{}, ErrNotFound
 	}
 
-	items, err := s.listSubscriptionBindingItems(ctx, portal.Subscription.ID)
-	if err != nil {
+	if err := s.hydrateSubscriptionAccess(ctx, &portal.Subscription); err != nil {
 		return PortalData{}, err
 	}
-	portal.Subscription.Bindings = items
-	portal.Subscription.BindingCount = len(items)
+	items := portal.Subscription.Bindings
 
 	nodes, err := s.ListNodes(ctx)
 	if err != nil {
@@ -1405,12 +1784,6 @@ func (s *Store) PortalDataByToken(ctx context.Context, token string) (PortalData
 	bindings, err := s.ListBindings(ctx)
 	if err != nil {
 		return PortalData{}, err
-	}
-	if len(items) == 0 {
-		portal.Nodes = nodes
-		portal.Inbounds = inbounds
-		portal.Bindings = bindings
-		return portal, nil
 	}
 	selectedBindingIDs := make(map[string]struct{}, len(items))
 	selectedNodeIDs := make(map[string]struct{}, len(items))
@@ -1448,6 +1821,54 @@ func (s *Store) PortalDataByToken(ctx context.Context, token string) (PortalData
 	return portal, nil
 }
 
+func (s *Store) activeSubscriptionUsersByBinding(ctx context.Context, users []model.User) (map[string][]model.User, error) {
+	userByID := make(map[string]model.User, len(users))
+	for _, user := range users {
+		userByID[user.ID] = user
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT s.user_id, spbi.node_inbound_binding_id
+		FROM subscriptions s
+		JOIN user_subscription_plans usp ON usp.subscription_id = s.id
+		JOIN subscription_plan_binding_items spbi ON spbi.subscription_plan_id = usp.subscription_plan_id
+		WHERE s.status = 'active' AND s.expires_at > ?
+		UNION
+		SELECT s.user_id, sbi.node_inbound_binding_id
+		FROM subscriptions s
+		JOIN subscription_binding_items sbi ON sbi.subscription_id = s.id
+		WHERE s.status = 'active' AND s.expires_at > ?`,
+		time.Now().UTC(),
+		time.Now().UTC(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query active subscription users by binding: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string][]model.User)
+	seen := make(map[string]map[string]struct{})
+	for rows.Next() {
+		var userID, bindingID string
+		if err := rows.Scan(&userID, &bindingID); err != nil {
+			return nil, fmt.Errorf("scan active subscription user binding: %w", err)
+		}
+		user, ok := userByID[userID]
+		if !ok {
+			continue
+		}
+		if seen[bindingID] == nil {
+			seen[bindingID] = make(map[string]struct{})
+		}
+		if _, ok := seen[bindingID][userID]; ok {
+			continue
+		}
+		seen[bindingID][userID] = struct{}{}
+		out[bindingID] = append(out[bindingID], user)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) NodeBundle(ctx context.Context, nodeID string) (model.Node, []model.InboundProfile, []model.TopologyLink, []model.Subscription, []model.User, error) {
 	node, err := s.GetNode(ctx, nodeID)
 	if err != nil {
@@ -1455,7 +1876,7 @@ func (s *Store) NodeBundle(ctx context.Context, nodeID string) (model.Node, []mo
 	}
 
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT p.id, p.name, p.protocol, p.listen_host, p.listen_port, p.transport, p.server_name, p.public_host, p.path, p.password, p.reality_public_key, p.reality_private_key, p.reality_handshake_server, p.reality_handshake_port, p.reality_short_id, p.tls_mode, p.tls_cert_path, p.tls_key_path, p.shadowsocks_method, p.metadata_json, p.created_at, p.modified_at
+		`SELECT b.id, p.id, p.name, p.protocol, p.listen_host, p.listen_port, p.transport, p.server_name, p.public_host, p.path, p.password, p.reality_public_key, p.reality_private_key, p.reality_handshake_server, p.reality_handshake_port, p.reality_short_id, p.tls_mode, p.tls_cert_path, p.tls_key_path, p.shadowsocks_method, p.metadata_json, p.created_at, p.modified_at
 		   FROM inbound_profiles p
 		   JOIN node_inbound_bindings b ON b.inbound_profile_id = p.id
 		  WHERE b.node_id = ?
@@ -1467,15 +1888,18 @@ func (s *Store) NodeBundle(ctx context.Context, nodeID string) (model.Node, []mo
 	}
 	defer rows.Close()
 	var inbounds []model.InboundProfile
+	var bindingIDs []string
 	for rows.Next() {
 		var item model.InboundProfile
 		var metadataJSON string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Protocol, &item.ListenHost, &item.ListenPort, &item.Transport, &item.ServerName, &item.PublicHost, &item.Path, &item.Password, &item.RealityPubKey, &item.RealityPrivateKey, &item.RealityHandshakeServer, &item.RealityHandshakePort, &item.RealityShort, &item.TLSMode, &item.TLSCertPath, &item.TLSKeyPath, &item.ShadowsocksMethod, &metadataJSON, &item.CreatedAt, &item.ModifiedAt); err != nil {
+		var bindingID string
+		if err := rows.Scan(&bindingID, &item.ID, &item.Name, &item.Protocol, &item.ListenHost, &item.ListenPort, &item.Transport, &item.ServerName, &item.PublicHost, &item.Path, &item.Password, &item.RealityPubKey, &item.RealityPrivateKey, &item.RealityHandshakeServer, &item.RealityHandshakePort, &item.RealityShort, &item.TLSMode, &item.TLSCertPath, &item.TLSKeyPath, &item.ShadowsocksMethod, &metadataJSON, &item.CreatedAt, &item.ModifiedAt); err != nil {
 			return model.Node{}, nil, nil, nil, nil, fmt.Errorf("scan node inbound profile: %w", err)
 		}
 		if err := json.Unmarshal([]byte(metadataJSON), &item.Metadata); err != nil {
 			item.Metadata = map[string]string{}
 		}
+		bindingIDs = append(bindingIDs, bindingID)
 		inbounds = append(inbounds, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -1507,6 +1931,17 @@ func (s *Store) NodeBundle(ctx context.Context, nodeID string) (model.Node, []mo
 	users, err := s.ListUsers(ctx)
 	if err != nil {
 		return model.Node{}, nil, nil, nil, nil, err
+	}
+	usersByBinding, err := s.activeSubscriptionUsersByBinding(ctx, users)
+	if err != nil {
+		return model.Node{}, nil, nil, nil, nil, err
+	}
+	for i := range inbounds {
+		assigned := usersByBinding[bindingIDs[i]]
+		if assigned == nil {
+			assigned = []model.User{}
+		}
+		inbounds[i].Users = assigned
 	}
 
 	return node, inbounds, filteredLinks, activeSubs, users, nil

@@ -209,7 +209,7 @@ download_ca() {
   fi
 
   info "Скачиваю CA сертификат панели"
-  curl -fsSLk "$PANEL_CA_URL" -o "$PANEL_CA_FILE"
+  curl -fsSLk -H "X-Panel-CA-Fingerprint: $PANEL_FINGERPRINT" "$PANEL_CA_URL" -o "$PANEL_CA_FILE"
 
   local actual_fp expected_fp
   actual_fp="$(openssl x509 -in "$PANEL_CA_FILE" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')"

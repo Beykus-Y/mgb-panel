@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -39,6 +41,8 @@ type Server struct {
 	dataDir    string
 	singboxBin string
 	localPoll  time.Duration
+	adminUser  string
+	adminPass  string
 	templates  *template.Template
 	httpServer *http.Server
 }
@@ -49,6 +53,8 @@ type Config struct {
 	DataDir       string
 	SingboxBinary string
 	LocalPoll     time.Duration
+	AdminUser     string
+	AdminPassword string
 }
 
 type adminPageData struct {
@@ -65,19 +71,28 @@ type adminPageData struct {
 }
 
 func New(store *database.Store, authority *pki.Authority, cfg Config) (*Server, error) {
+	adminUser := strings.TrimSpace(cfg.AdminUser)
+	if adminUser == "" {
+		return nil, fmt.Errorf("admin user is required")
+	}
+	if cfg.AdminPassword == "" {
+		return nil, fmt.Errorf("admin password is required")
+	}
+
 	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"pageTitle":              pageTitle,
-		"pageDescription":        pageDescription,
-		"statusLabel":            statusLabel,
-		"roleLabel":              roleLabel,
-		"protocolLabel":          protocolLabel,
-		"transportLabel":         transportLabel,
-		"tlsModeLabel":           tlsModeLabel,
-		"formatDate":             formatDate,
-		"formatDateTime":         formatDateTime,
-		"formatDateTimeInput":    formatDateTimeInput,
-		"hasSubscriptionBinding": hasSubscriptionBinding,
-		"nodeInstallCommand":     nodeInstallCommand,
+		"pageTitle":               pageTitle,
+		"pageDescription":         pageDescription,
+		"statusLabel":             statusLabel,
+		"roleLabel":               roleLabel,
+		"protocolLabel":           protocolLabel,
+		"transportLabel":          transportLabel,
+		"tlsModeLabel":            tlsModeLabel,
+		"formatDate":              formatDate,
+		"formatDateTime":          formatDateTime,
+		"formatDateTimeInput":     formatDateTimeInput,
+		"hasSubscriptionBinding":  hasSubscriptionBinding,
+		"hasUserSubscriptionPlan": hasUserSubscriptionPlan,
+		"nodeInstallCommand":      nodeInstallCommand,
 	}).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -94,42 +109,46 @@ func New(store *database.Store, authority *pki.Authority, cfg Config) (*Server, 
 		dataDir:    cfg.DataDir,
 		singboxBin: cfg.SingboxBinary,
 		localPoll:  poll,
+		adminUser:  adminUser,
+		adminPass:  cfg.AdminPassword,
 		templates:  tmpl,
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", srv.handleDashboard)
-	mux.HandleFunc("/overview", srv.handleAdminPage("overview"))
-	mux.HandleFunc("/nodes", srv.handleAdminPage("nodes"))
-	mux.HandleFunc("/users", srv.handleAdminPage("users"))
-	mux.HandleFunc("/subscriptions", srv.handleAdminPage("subscriptions"))
-	mux.HandleFunc("/inbounds", srv.handleAdminPage("inbounds"))
-	mux.HandleFunc("/bindings", srv.handleAdminPage("bindings"))
-	mux.HandleFunc("/topology", srv.handleAdminPage("topology"))
-	mux.HandleFunc("/revisions", srv.handleAdminPage("revisions"))
+	mux.HandleFunc("/", srv.requireAdminAuth(srv.handleDashboard))
+	mux.HandleFunc("/overview", srv.requireAdminAuth(srv.handleAdminPage("overview")))
+	mux.HandleFunc("/nodes", srv.requireAdminAuth(srv.handleAdminPage("nodes")))
+	mux.HandleFunc("/users", srv.requireAdminAuth(srv.handleAdminPage("users")))
+	mux.HandleFunc("/subscriptions", srv.requireAdminAuth(srv.handleAdminPage("subscriptions")))
+	mux.HandleFunc("/inbounds", srv.requireAdminAuth(srv.handleAdminPage("inbounds")))
+	mux.HandleFunc("/bindings", srv.requireAdminAuth(srv.handleAdminPage("bindings")))
+	mux.HandleFunc("/topology", srv.requireAdminAuth(srv.handleAdminPage("topology")))
+	mux.HandleFunc("/revisions", srv.requireAdminAuth(srv.handleAdminPage("revisions")))
 	mux.HandleFunc("/install/node.sh", srv.handleInstallScript("assets/install-node.sh"))
 	mux.HandleFunc("/install/panel.sh", srv.handleInstallScript("assets/install-panel.sh"))
-	mux.HandleFunc("/admin/nodes", srv.handleCreateNodeForm)
-	mux.HandleFunc("/admin/users", srv.handleCreateUserForm)
-	mux.HandleFunc("/admin/users/update", srv.handleUpdateUserForm)
-	mux.HandleFunc("/admin/users/freeze", srv.handleFreezeUserForm)
-	mux.HandleFunc("/admin/users/activate", srv.handleActivateUserForm)
-	mux.HandleFunc("/admin/users/extend", srv.handleExtendUserForm)
-	mux.HandleFunc("/admin/subscriptions", srv.handleCreateSubscriptionForm)
-	mux.HandleFunc("/admin/inbounds", srv.handleCreateInboundForm)
-	mux.HandleFunc("/admin/bindings", srv.handleCreateBindingForm)
-	mux.HandleFunc("/admin/topology", srv.handleCreateTopologyForm)
-	mux.HandleFunc("/admin/nodes/enable-local", srv.handleEnableLocalNode)
+	mux.HandleFunc("/admin/nodes", srv.requireAdminAuth(srv.handleCreateNodeForm))
+	mux.HandleFunc("/admin/users", srv.requireAdminAuth(srv.handleCreateUserForm))
+	mux.HandleFunc("/admin/users/update", srv.requireAdminAuth(srv.handleUpdateUserForm))
+	mux.HandleFunc("/admin/users/freeze", srv.requireAdminAuth(srv.handleFreezeUserForm))
+	mux.HandleFunc("/admin/users/activate", srv.requireAdminAuth(srv.handleActivateUserForm))
+	mux.HandleFunc("/admin/users/extend", srv.requireAdminAuth(srv.handleExtendUserForm))
+	mux.HandleFunc("/admin/subscriptions", srv.requireAdminAuth(srv.handleCreateSubscriptionForm))
+	mux.HandleFunc("/admin/subscriptions/update", srv.requireAdminAuth(srv.handleUpdateSubscriptionForm))
+	mux.HandleFunc("/admin/subscriptions/delete", srv.requireAdminAuth(srv.handleDeleteSubscriptionForm))
+	mux.HandleFunc("/admin/inbounds", srv.requireAdminAuth(srv.handleCreateInboundForm))
+	mux.HandleFunc("/admin/bindings", srv.requireAdminAuth(srv.handleCreateBindingForm))
+	mux.HandleFunc("/admin/topology", srv.requireAdminAuth(srv.handleCreateTopologyForm))
+	mux.HandleFunc("/admin/nodes/enable-local", srv.requireAdminAuth(srv.handleEnableLocalNode))
 
-	mux.HandleFunc("/api/admin/nodes", srv.handleAdminNodesAPI)
-	mux.HandleFunc("/api/admin/users", srv.handleAdminUsersAPI)
-	mux.HandleFunc("/api/admin/subscriptions", srv.handleAdminSubscriptionsAPI)
-	mux.HandleFunc("/api/admin/inbounds", srv.handleAdminInboundsAPI)
-	mux.HandleFunc("/api/admin/bindings", srv.handleAdminBindingsAPI)
-	mux.HandleFunc("/api/admin/topology", srv.handleAdminTopologyAPI)
-	mux.HandleFunc("/api/admin/revisions", srv.handleAdminRevisionsAPI)
+	mux.HandleFunc("/api/admin/nodes", srv.requireAdminAuth(srv.handleAdminNodesAPI))
+	mux.HandleFunc("/api/admin/users", srv.requireAdminAuth(srv.handleAdminUsersAPI))
+	mux.HandleFunc("/api/admin/subscriptions", srv.requireAdminAuth(srv.handleAdminSubscriptionsAPI))
+	mux.HandleFunc("/api/admin/inbounds", srv.requireAdminAuth(srv.handleAdminInboundsAPI))
+	mux.HandleFunc("/api/admin/bindings", srv.requireAdminAuth(srv.handleAdminBindingsAPI))
+	mux.HandleFunc("/api/admin/topology", srv.requireAdminAuth(srv.handleAdminTopologyAPI))
+	mux.HandleFunc("/api/admin/revisions", srv.requireAdminAuth(srv.handleAdminRevisionsAPI))
 
-	mux.HandleFunc("/api/pki/ca", srv.handleCAPEM)
+	mux.HandleFunc("/api/pki/ca", srv.requireCAAccess(srv.handleCAPEM))
 	mux.HandleFunc("/api/node/enroll", srv.handleNodeEnroll)
 	mux.HandleFunc("/api/node/heartbeat", srv.requireNodeMTLS(srv.handleNodeHeartbeat))
 	mux.HandleFunc("/api/node/config", srv.requireNodeMTLS(srv.handleNodeConfig))
@@ -212,6 +231,10 @@ func (s *Server) renderAdminPage(w http.ResponseWriter, r *http.Request, page st
 			nodeName    = binding.NodeID
 			nodeAddress string
 			inboundName = binding.InboundProfileID
+			protocol    string
+			transport   string
+			tlsMode     string
+			listenPort  int
 			publicHost  string
 		)
 		for _, node := range dashboard.Nodes {
@@ -224,6 +247,10 @@ func (s *Server) renderAdminPage(w http.ResponseWriter, r *http.Request, page st
 		for _, inbound := range dashboard.Inbounds {
 			if inbound.ID == binding.InboundProfileID {
 				inboundName = inbound.Name
+				protocol = inbound.Protocol
+				transport = inbound.Transport
+				tlsMode = inbound.TLSMode
+				listenPort = inbound.ListenPort
 				publicHost = inbound.PublicHost
 				if publicHost == "" {
 					publicHost = inbound.ServerName
@@ -244,6 +271,10 @@ func (s *Server) renderAdminPage(w http.ResponseWriter, r *http.Request, page st
 			NodeAddress:          nodeAddress,
 			InboundProfileID:     binding.InboundProfileID,
 			InboundName:          inboundName,
+			Protocol:             protocol,
+			ListenPort:           listenPort,
+			Transport:            transport,
+			TLSMode:              tlsMode,
 			PublicHost:           publicHost,
 		})
 	}
@@ -293,13 +324,37 @@ func (s *Server) handleCreateSubscriptionForm(w http.ResponseWriter, r *http.Req
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	days, _ := strconv.Atoi(defaultForm(r, "days", "30"))
-	if _, err := s.store.CreateSubscription(r.Context(), database.CreateSubscriptionParams{
-		UserID:     r.FormValue("user_id"),
-		Name:       defaultForm(r, "name", "default"),
-		ExpiresAt:  time.Now().UTC().Add(time.Duration(days) * 24 * time.Hour),
+	if _, err := s.store.CreateSubscriptionPlan(r.Context(), database.CreateSubscriptionPlanParams{
+		Name:       defaultForm(r, "name", "default-plan"),
 		BindingIDs: r.Form["binding_id"],
 	}); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, adminRedirect(r, "/subscriptions"), http.StatusSeeOther)
+}
+
+func (s *Server) handleUpdateSubscriptionForm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := s.store.UpdateSubscriptionPlan(r.Context(), strings.TrimSpace(r.FormValue("subscription_id")), database.CreateSubscriptionPlanParams{
+		Name:       defaultForm(r, "name", "default-plan"),
+		BindingIDs: r.Form["binding_id"],
+	}); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, adminRedirect(r, "/subscriptions"), http.StatusSeeOther)
+}
+
+func (s *Server) handleDeleteSubscriptionForm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.store.DeleteSubscriptionPlan(r.Context(), strings.TrimSpace(r.FormValue("subscription_id"))); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -362,15 +417,18 @@ func (s *Server) handleUpdateUserForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subscriptionName := strings.TrimSpace(r.FormValue("subscription_name"))
 	expiresRaw := strings.TrimSpace(r.FormValue("subscription_expires_at"))
-	if subscriptionName != "" && expiresRaw != "" {
+	planIDs := r.Form["plan_id"]
+	if expiresRaw != "" || len(planIDs) > 0 {
+		if expiresRaw == "" {
+			expiresRaw = time.Now().Add(30 * 24 * time.Hour).Format("2006-01-02T15:04")
+		}
 		expiresAt, err := time.ParseInLocation("2006-01-02T15:04", expiresRaw, time.Local)
 		if err != nil {
 			http.Error(w, "invalid subscription expiry", http.StatusBadRequest)
 			return
 		}
-		if _, err := s.store.UpdateUserSubscription(r.Context(), userID, subscriptionName, expiresAt.UTC()); err != nil {
+		if _, err := s.store.UpdateUserSubscriptionPlans(r.Context(), userID, planIDs, expiresAt.UTC()); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -503,23 +561,19 @@ func (s *Server) handleAdminUsersAPI(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminSubscriptionsAPI(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		subs, err := s.store.ListSubscriptions(r.Context())
+		subs, err := s.store.ListSubscriptionPlans(r.Context())
 		writeJSON(w, subs, err)
 	case http.MethodPost:
 		var req struct {
-			UserID     string   `json:"user_id"`
 			Name       string   `json:"name"`
-			Days       int      `json:"days"`
 			BindingIDs []string `json:"binding_ids"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		sub, err := s.store.CreateSubscription(r.Context(), database.CreateSubscriptionParams{
-			UserID:     req.UserID,
+		sub, err := s.store.CreateSubscriptionPlan(r.Context(), database.CreateSubscriptionPlanParams{
 			Name:       req.Name,
-			ExpiresAt:  time.Now().UTC().Add(time.Duration(maxInt(req.Days, 1)) * 24 * time.Hour),
 			BindingIDs: req.BindingIDs,
 		})
 		writeJSON(w, sub, err)
@@ -596,6 +650,10 @@ func (s *Server) handleAdminRevisionsAPI(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleCAPEM(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
 	_, _ = w.Write(s.authority.CAPEM())
 }
@@ -655,29 +713,13 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 }
 
 func (s *Server) handleNodeConfig(w http.ResponseWriter, r *http.Request, nodeID string) {
-	node, inbounds, links, subs, users, err := s.store.NodeBundle(r.Context(), nodeID)
+	node, inbounds, links, _, _, err := s.store.NodeBundle(r.Context(), nodeID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	activeUsers := make([]model.User, 0, len(users))
-	userMap := make(map[string]model.User, len(users))
-	activeUserIDs := make(map[string]struct{}, len(users))
-	for _, user := range users {
-		userMap[user.ID] = user
-	}
-	for _, sub := range subs {
-		if _, seen := activeUserIDs[sub.UserID]; seen {
-			continue
-		}
-		if user, ok := userMap[sub.UserID]; ok {
-			activeUsers = append(activeUsers, user)
-			activeUserIDs[sub.UserID] = struct{}{}
-		}
-	}
-
-	configBytes, err := topology.CompileNodeConfig(node, inbounds, links, activeUsers)
+	configBytes, err := topology.CompileNodeConfig(node, inbounds, links, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -826,6 +868,52 @@ func (s *Server) requireNodeMTLS(next func(http.ResponseWriter, *http.Request, s
 		}
 		next(w, r, nodeID)
 	}
+}
+
+func (s *Server) requireAdminAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.isAdminAuthorized(r) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="mgb-panel admin", charset="UTF-8"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) requireCAAccess(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.isAdminAuthorized(r) || s.hasExpectedCAFingerprint(r) {
+			next(w, r)
+			return
+		}
+		http.Error(w, "panel CA fingerprint is required", http.StatusUnauthorized)
+	}
+}
+
+func (s *Server) isAdminAuthorized(r *http.Request) bool {
+	user, pass, ok := r.BasicAuth()
+	if !ok {
+		return false
+	}
+	return constantTimeEqual(user, s.adminUser) && constantTimeEqual(pass, s.adminPass)
+}
+
+func (s *Server) hasExpectedCAFingerprint(r *http.Request) bool {
+	fingerprint := strings.TrimSpace(r.Header.Get("X-Panel-CA-Fingerprint"))
+	if fingerprint == "" {
+		fingerprint = strings.TrimSpace(r.URL.Query().Get("fingerprint"))
+	}
+	if fingerprint == "" {
+		return false
+	}
+	return constantTimeEqual(strings.ToLower(fingerprint), s.authority.FingerprintHex())
+}
+
+func constantTimeEqual(a, b string) bool {
+	aSum := sha256.Sum256([]byte(a))
+	bSum := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(aSum[:], bSum[:]) == 1
 }
 
 func writeJSON(w http.ResponseWriter, payload any, err error) {
@@ -1040,7 +1128,7 @@ func pageDescription(page string) string {
 	case "users":
 		return "База пользователей, для которых выпускаются ключи доступа и подписки."
 	case "subscriptions":
-		return "Подписки, сроки действия и ссылки на пользовательские порталы и feed."
+		return "Наборы inbound-ов, которые затем назначаются пользователям."
 	case "inbounds":
 		return "Профили входящих подключений с выбором транспорта и режима TLS/REALITY."
 	case "bindings":
@@ -1169,9 +1257,18 @@ func formatDateTimeInput(t time.Time) string {
 	return t.In(time.Local).Format("2006-01-02T15:04")
 }
 
-func hasSubscriptionBinding(sub model.Subscription, bindingID string) bool {
-	for _, item := range sub.Bindings {
+func hasSubscriptionBinding(plan model.SubscriptionPlan, bindingID string) bool {
+	for _, item := range plan.Bindings {
 		if item.NodeInboundBindingID == bindingID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasUserSubscriptionPlan(user model.User, planID string) bool {
+	for _, assignedID := range user.CurrentSubscriptionPlanIDs {
+		if assignedID == planID {
 			return true
 		}
 	}

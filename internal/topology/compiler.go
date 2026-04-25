@@ -34,12 +34,16 @@ func CompileNodeConfig(node model.Node, inbounds []model.InboundProfile, links [
 		if err != nil {
 			return nil, fmt.Errorf("inbound %s: %w", defaultString(inbound.Name, inbound.ID), err)
 		}
-		if len(users) == 0 {
+		inboundUsers := users
+		if inbound.Users != nil {
+			inboundUsers = inbound.Users
+		}
+		if len(inboundUsers) == 0 {
 			continue
 		}
 
-		usersBlock := make([]map[string]any, 0, len(users))
-		for _, user := range users {
+		usersBlock := make([]map[string]any, 0, len(inboundUsers))
+		for _, user := range inboundUsers {
 			switch profile.Protocol {
 			case "vless":
 				usersBlock = append(usersBlock, map[string]any{"name": user.Name, "uuid": user.AccessKey, "flow": ""})

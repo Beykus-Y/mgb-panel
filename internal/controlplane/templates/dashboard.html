@@ -442,6 +442,55 @@
       width: auto;
     }
 
+    .dialog-button {
+      width: auto;
+      background: rgba(108, 166, 255, 0.14);
+      border: 1px solid rgba(108, 166, 255, 0.28);
+      color: var(--accent-2);
+    }
+
+    .modal {
+      width: min(760px, calc(100vw - 36px));
+      max-height: calc(100vh - 48px);
+      padding: 0;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius-lg);
+      color: var(--text);
+      background: linear-gradient(180deg, var(--panel-strong), rgba(10, 15, 23, 0.98));
+      box-shadow: var(--shadow);
+    }
+
+    .modal::backdrop {
+      background: rgba(2, 6, 12, 0.72);
+      backdrop-filter: blur(8px);
+    }
+
+    .modal-panel {
+      display: grid;
+      gap: 18px;
+      padding: 22px;
+    }
+
+    .modal-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .modal-head h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .modal-close {
+      width: auto;
+      padding: 8px 12px;
+      background: rgba(18, 27, 42, 0.92);
+      border: 1px solid var(--line-strong);
+      color: var(--muted);
+    }
+
     .button-muted {
       background: rgba(18, 27, 42, 0.92);
       border: 1px solid var(--line-strong);
@@ -656,7 +705,7 @@
         <div class="metric"><strong>{{ len .Dashboard.Inbounds }}</strong><span>Инбаундов</span></div>
         <div class="metric"><strong>{{ len .Dashboard.Nodes }}</strong><span>Узлов</span></div>
         <div class="metric"><strong>{{ len .Dashboard.Users }}</strong><span>Пользователей</span></div>
-        <div class="metric"><strong>{{ len .Dashboard.Subscriptions }}</strong><span>Подписок</span></div>
+        <div class="metric"><strong>{{ len .Dashboard.Subscriptions }}</strong><span>Наборов</span></div>
         <div class="metric"><strong>{{ len .Dashboard.Bindings }}</strong><span>Привязок</span></div>
         <div class="metric"><strong>{{ len .Dashboard.Revisions }}</strong><span>Ревизий</span></div>
       </section>
@@ -670,12 +719,12 @@
           <div class="grid-3">
             <div class="kpi"><strong>Инбаунды</strong><span>Порты, транспорт, TLS/REALITY</span></div>
             <div class="kpi"><strong>Узлы</strong><span>Статус heartbeat и роли</span></div>
-            <div class="kpi"><strong>Подписки</strong><span>Порталы и feed для клиентов</span></div>
+            <div class="kpi"><strong>Подписки</strong><span>Наборы inbound-ов для выдачи пользователям</span></div>
           </div>
           <div class="inline-links">
             <a class="endpoint" href="/inbounds">Открыть инбаунды</a>
             <a class="endpoint" href="/nodes">Открыть узлы</a>
-            <a class="endpoint" href="/subscriptions">Открыть подписки</a>
+            <a class="endpoint" href="/subscriptions">Открыть наборы</a>
           </div>
           <div class="api-box">
             <div class="small">API панели</div>
@@ -844,8 +893,9 @@
           </div>
           <div class="table-wrap">
             <table>
-              <tr><th>Пользователь</th><th>Контакты и заметка</th><th>Текущая подписка</th><th>Управление</th></tr>
+              <tr><th>Пользователь</th><th>Контакты и заметка</th><th>Текущая подписка</th><th>Ссылки</th><th>Управление</th></tr>
               {{ range .Dashboard.Users }}
+              {{ $user := . }}
               <tr>
                 <td>
                   <div>{{ .Name }}</div>
@@ -862,53 +912,35 @@
                 </td>
                 <td>
                   {{ if .CurrentSubscriptionID }}
-                  <div>{{ .CurrentSubscriptionName }}</div>
+                  <div class="actions-row">
+                    {{ range .CurrentSubscriptionPlanNames }}
+                    <span class="tag">{{ . }}</span>
+                    {{ else }}
+                    <span class="small">Наборы не выбраны</span>
+                    {{ end }}
+                  </div>
                   <div class="small" style="margin-top:6px;">До {{ formatDateTime .CurrentSubscriptionExpiresAt }}</div>
                   <div class="actions-row" style="margin-top:8px;">
                     <span class="pill status-{{ .CurrentSubscriptionStatus }}">{{ statusLabel .CurrentSubscriptionStatus }}</span>
-                    {{ if .CurrentSubscriptionToken }}
-                    <button type="button" class="copy-btn" data-copy="{{ $.EffectiveBaseURL }}/subscription/{{ .CurrentSubscriptionToken }}">Feed</button>
-                    {{ end }}
                   </div>
                   {{ else }}
                   <span class="small">Подписка ещё не создана.</span>
                   {{ end }}
                 </td>
                 <td>
-                  <form method="post" action="/admin/users/update">
-                    <input type="hidden" name="redirect_to" value="/users">
-                    <input type="hidden" name="user_id" value="{{ .ID }}">
-                    <div class="form-grid">
-                      <div class="field">
-                        <label>Имя</label>
-                        <input name="name" value="{{ .Name }}" required>
-                      </div>
-                      <div class="field">
-                        <label>Email</label>
-                        <input name="email" type="email" value="{{ .Email }}" required>
-                      </div>
-                      <div class="field">
-                        <label>Telegram</label>
-                        <input name="telegram" value="{{ .Telegram }}" placeholder="@username или ID">
-                      </div>
-                      <div class="field">
-                        <label>Заметка</label>
-                        <input name="note" value="{{ .Note }}" placeholder="доп. информация">
-                      </div>
-                      <div class="field">
-                        <label>Подписка</label>
-                        <input name="subscription_name" value="{{ .CurrentSubscriptionName }}" placeholder="default-plan">
-                      </div>
-                      <div class="field">
-                        <label>Активен до</label>
-                        <input name="subscription_expires_at" type="datetime-local" value="{{ formatDateTimeInput .CurrentSubscriptionExpiresAt }}">
-                      </div>
-                    </div>
-                    <div class="actions-row" style="margin-top:10px;">
-                      <button type="submit">Сохранить</button>
-                    </div>
-                  </form>
-                  <div class="actions-row" style="margin-top:10px;">
+                  {{ if .CurrentSubscriptionToken }}
+                  <div class="inline-links">
+                    <a class="endpoint" href="/portal/{{ .CurrentSubscriptionToken }}">Портал</a>
+                    <a class="endpoint" href="/subscription/{{ .CurrentSubscriptionToken }}">Feed</a>
+                    <button type="button" class="copy-btn" data-copy="{{ $.EffectiveBaseURL }}/subscription/{{ .CurrentSubscriptionToken }}">Скопировать feed</button>
+                  </div>
+                  {{ else }}
+                  <span class="small">Ссылки появятся после выдачи подписки.</span>
+                  {{ end }}
+                </td>
+                <td>
+                  <div class="actions-row">
+                    <button type="button" class="dialog-button" data-dialog-open="user-edit-{{ .ID }}">Редактировать</button>
                     <form method="post" action="/admin/users/freeze">
                       <input type="hidden" name="redirect_to" value="/users">
                       <input type="hidden" name="user_id" value="{{ .ID }}">
@@ -926,10 +958,69 @@
                       <button type="submit" class="button-muted">+30 дней</button>
                     </form>
                   </div>
+                  <dialog class="modal" id="user-edit-{{ .ID }}">
+                    <div class="modal-panel">
+                      <div class="modal-head">
+                        <div>
+                          <h3>Редактировать пользователя</h3>
+                          <div class="small" style="margin-top:6px;">{{ .Name }} · {{ .Email }}</div>
+                        </div>
+                        <button type="button" class="modal-close" data-dialog-close>Закрыть</button>
+                      </div>
+                      <form method="post" action="/admin/users/update">
+                        <input type="hidden" name="redirect_to" value="/users">
+                        <input type="hidden" name="user_id" value="{{ .ID }}">
+                        <div class="form-grid">
+                          <p class="form-section-label">Пользователь</p>
+                          <div class="field">
+                            <label>Имя</label>
+                            <input name="name" value="{{ .Name }}" required>
+                          </div>
+                          <div class="field">
+                            <label>Email</label>
+                            <input name="email" type="email" value="{{ .Email }}" required>
+                          </div>
+                          <div class="field">
+                            <label>Telegram</label>
+                            <input name="telegram" value="{{ .Telegram }}" placeholder="@username или ID">
+                          </div>
+                          <div class="field">
+                            <label>Заметка</label>
+                            <input name="note" value="{{ .Note }}" placeholder="доп. информация">
+                          </div>
+                          <p class="form-section-label">Доступ</p>
+                          <div class="field" style="grid-column:1 / -1;">
+                            <label>Наборы</label>
+                            <div class="choice-list">
+                              {{ range $.Dashboard.Subscriptions }}
+                              <label class="choice-item">
+                                <input type="checkbox" name="plan_id" value="{{ .ID }}" {{ if hasUserSubscriptionPlan $user .ID }}checked{{ end }}>
+                                <span>
+                                  <strong>{{ .Name }}</strong>
+                                  <span class="small">{{ .BindingCount }} точек публикации</span>
+                                </span>
+                              </label>
+                              {{ else }}
+                              <div class="small">Сначала создайте набор во вкладке «Подписки».</div>
+                              {{ end }}
+                            </div>
+                          </div>
+                          <div class="field">
+                            <label>Активен до</label>
+                            <input name="subscription_expires_at" type="datetime-local" value="{{ formatDateTimeInput .CurrentSubscriptionExpiresAt }}">
+                          </div>
+                        </div>
+                        <div class="actions-row" style="margin-top:10px;">
+                          <button type="submit">Сохранить</button>
+                          <button type="button" class="button-muted" data-dialog-close>Отмена</button>
+                        </div>
+                      </form>
+                    </div>
+                  </dialog>
                 </td>
               </tr>
               {{ else }}
-              <tr><td colspan="4">Пользователей пока нет.</td></tr>
+              <tr><td colspan="5">Пользователей пока нет.</td></tr>
               {{ end }}
             </table>
           </div>
@@ -973,39 +1064,79 @@
           </div>
           <div class="table-wrap">
             <table>
-              <tr><th>Пользователь</th><th>Подписка</th><th>Срок</th><th>Что входит</th><th>Ссылки</th></tr>
+              <tr><th>Набор</th><th>Что входит</th><th>Создано</th><th>Управление</th></tr>
               {{ range .Dashboard.Subscriptions }}
+              {{ $plan := . }}
               <tr>
                 <td>
-                  <div>{{ index $.UserNames .UserID }}</div>
-                  <div class="mono">{{ .UserID }}</div>
-                </td>
-                <td>
                   <div>{{ .Name }}</div>
-                  <span class="pill status-{{ .Status }}">{{ statusLabel .Status }}</span>
+                  <div class="mono">{{ .ID }}</div>
                 </td>
-                <td>{{ formatDateTime .ExpiresAt }}</td>
                 <td>
                   <div>{{ .BindingCount }} точек публикации</div>
                   {{ range .Bindings }}
-                  <div class="small" style="margin-top:6px;">{{ .NodeName }} · {{ .PublicHost }} · {{ .InboundName }}</div>
+                  <div class="small" style="margin-top:6px;">
+                    {{ .NodeName }} · {{ .PublicHost }} · {{ .InboundName }}
+                    <span class="tag" style="margin-left:6px;">{{ protocolLabel .Protocol }}</span>
+                    <span class="small">:{{ .ListenPort }} · {{ transportLabel .Transport }} · {{ tlsModeLabel .TLSMode }}</span>
+                  </div>
                   {{ else }}
                   <div class="small" style="margin-top:6px;">Ничего не выбрано</div>
                   {{ end }}
                 </td>
+                <td>{{ formatDateTime .CreatedAt }}</td>
                 <td>
-                  <div class="inline-links">
-                    <a class="endpoint" href="/portal/{{ .Token }}">Портал</a>
-                    <a class="endpoint" href="/subscription/{{ .Token }}">Feed</a>
-                    <button type="button" class="copy-btn" data-copy="{{ $.EffectiveBaseURL }}/subscription/{{ .Token }}">Скопировать подписку</button>
+                  <div class="actions-row">
+                    <button type="button" class="dialog-button" data-dialog-open="subscription-edit-{{ .ID }}">Редактировать</button>
+                    <form method="post" action="/admin/subscriptions/delete">
+                      <input type="hidden" name="redirect_to" value="/subscriptions">
+                      <input type="hidden" name="subscription_id" value="{{ .ID }}">
+                      <button type="submit" class="button-danger">Удалить</button>
+                    </form>
                   </div>
-                  <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
-                    <span class="mono mono-trunc" title="{{ .Token }}">{{ .Token }}</span>
-                  </div>
+                  <dialog class="modal" id="subscription-edit-{{ .ID }}">
+                    <div class="modal-panel">
+                      <div class="modal-head">
+                        <div>
+                          <h3>Редактировать набор</h3>
+                          <div class="small" style="margin-top:6px;">{{ .Name }}</div>
+                        </div>
+                        <button type="button" class="modal-close" data-dialog-close>Закрыть</button>
+                      </div>
+                      <form method="post" action="/admin/subscriptions/update">
+                        <input type="hidden" name="redirect_to" value="/subscriptions">
+                        <input type="hidden" name="subscription_id" value="{{ .ID }}">
+                        <div class="field">
+                          <label>Название</label>
+                          <input name="name" value="{{ .Name }}" required>
+                        </div>
+                        <div class="field">
+                          <label>Inbound-ы в наборе</label>
+                          <div class="choice-list">
+                            {{ range $.BindingCatalog }}
+                            <label class="choice-item">
+                              <input type="checkbox" name="binding_id" value="{{ .NodeInboundBindingID }}" {{ if hasSubscriptionBinding $plan .NodeInboundBindingID }}checked{{ end }}>
+                              <span>
+                                <strong>{{ .NodeName }} · {{ .PublicHost }}</strong>
+                                <span class="small">Inbound: {{ .InboundName }} · {{ protocolLabel .Protocol }}:{{ .ListenPort }} · {{ transportLabel .Transport }} · {{ tlsModeLabel .TLSMode }}</span>
+                              </span>
+                            </label>
+                            {{ else }}
+                            <div class="small">Сначала создайте inbound и привяжите его к узлу.</div>
+                            {{ end }}
+                          </div>
+                        </div>
+                        <div class="actions-row">
+                          <button type="submit">Сохранить</button>
+                          <button type="button" class="button-muted" data-dialog-close>Отмена</button>
+                        </div>
+                      </form>
+                    </div>
+                  </dialog>
                 </td>
               </tr>
               {{ else }}
-              <tr><td colspan="5">Подписок пока нет.</td></tr>
+              <tr><td colspan="4">Наборов пока нет.</td></tr>
               {{ end }}
             </table>
           </div>
@@ -1013,34 +1144,24 @@
 
         <article class="card">
           <div class="section-title">
-            <h2>Подписка пользователя</h2>
-            <span class="small">Для выбранного пользователя запись будет создана или обновлена</span>
+            <h2>Новый набор</h2>
+            <span class="small">Набор хранит только inbound-ы, без пользователей и сроков</span>
           </div>
           <form method="post" action="/admin/subscriptions">
             <input type="hidden" name="redirect_to" value="/subscriptions">
             <div class="field">
-              <label for="subscription-user">Пользователь</label>
-              <select id="subscription-user" name="user_id">
-                {{ range .Dashboard.Users }}<option value="{{ .ID }}">{{ .Name }} ({{ .Email }})</option>{{ else }}<option value="">Сначала создайте пользователя</option>{{ end }}
-              </select>
+              <label for="subscription-name">Название набора</label>
+              <input id="subscription-name" name="name" placeholder="WL" required>
             </div>
             <div class="field">
-              <label for="subscription-name">Название плана</label>
-              <input id="subscription-name" name="name" placeholder="default-plan" required>
-            </div>
-            <div class="field">
-              <label for="subscription-days">Срок действия, дней</label>
-              <input id="subscription-days" name="days" type="number" min="1" max="36500" value="30">
-            </div>
-            <div class="field">
-              <label>Включить в подписку</label>
+              <label>Inbound-ы в наборе</label>
               <div class="choice-list">
                 {{ range .BindingCatalog }}
                 <label class="choice-item">
                   <input type="checkbox" name="binding_id" value="{{ .NodeInboundBindingID }}">
                   <span>
                     <strong>{{ .NodeName }} · {{ .PublicHost }}</strong>
-                    <span class="small">Inbound: {{ .InboundName }}</span>
+                    <span class="small">Inbound: {{ .InboundName }} · {{ protocolLabel .Protocol }}:{{ .ListenPort }} · {{ transportLabel .Transport }} · {{ tlsModeLabel .TLSMode }}</span>
                   </span>
                 </label>
                 {{ else }}
@@ -1048,7 +1169,7 @@
                 {{ end }}
               </div>
             </div>
-            <button type="submit">Выпустить подписку</button>
+            <button type="submit">Создать набор</button>
           </form>
         </article>
       </section>
@@ -1432,6 +1553,37 @@
         try { document.execCommand("copy"); cb(); } catch (e) {}
         document.body.removeChild(ta);
       }
+
+      // ── Dialogs ──────────────────────────────────────────────
+      document.querySelectorAll("[data-dialog-open]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var dialog = document.getElementById(btn.getAttribute("data-dialog-open"));
+          if (!dialog) return;
+          if (dialog.showModal) {
+            dialog.showModal();
+          } else {
+            dialog.setAttribute("open", "open");
+          }
+        });
+      });
+
+      document.querySelectorAll("[data-dialog-close]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var dialog = btn.closest("dialog");
+          if (!dialog) return;
+          if (dialog.close) {
+            dialog.close();
+          } else {
+            dialog.removeAttribute("open");
+          }
+        });
+      });
+
+      document.querySelectorAll("dialog").forEach(function (dialog) {
+        dialog.addEventListener("click", function (event) {
+          if (event.target === dialog) dialog.close();
+        });
+      });
 
       // ── Submit loading state ─────────────────────────────────
       document.querySelectorAll("form").forEach(function (form) {

@@ -28,6 +28,8 @@ type User struct {
 	AccessKey                    string    `json:"access_key"`
 	CurrentSubscriptionID        string    `json:"current_subscription_id,omitempty"`
 	CurrentSubscriptionName      string    `json:"current_subscription_name,omitempty"`
+	CurrentSubscriptionPlanIDs   []string  `json:"current_subscription_plan_ids,omitempty"`
+	CurrentSubscriptionPlanNames []string  `json:"current_subscription_plan_names,omitempty"`
 	CurrentSubscriptionStatus    string    `json:"current_subscription_status,omitempty"`
 	CurrentSubscriptionToken     string    `json:"current_subscription_token,omitempty"`
 	CurrentSubscriptionExpiresAt time.Time `json:"current_subscription_expires_at,omitempty"`
@@ -42,6 +44,18 @@ type Subscription struct {
 	Status       string                    `json:"status"`
 	ExpiresAt    time.Time                 `json:"expires_at"`
 	Token        string                    `json:"token,omitempty"`
+	PlanIDs      []string                  `json:"plan_ids,omitempty"`
+	PlanNames    []string                  `json:"plan_names,omitempty"`
+	Plans        []SubscriptionPlan        `json:"plans,omitempty"`
+	BindingCount int                       `json:"binding_count"`
+	Bindings     []SubscriptionBindingItem `json:"bindings,omitempty"`
+	CreatedAt    time.Time                 `json:"created_at"`
+	ModifiedAt   time.Time                 `json:"modified_at"`
+}
+
+type SubscriptionPlan struct {
+	ID           string                    `json:"id"`
+	Name         string                    `json:"name"`
 	BindingCount int                       `json:"binding_count"`
 	Bindings     []SubscriptionBindingItem `json:"bindings,omitempty"`
 	CreatedAt    time.Time                 `json:"created_at"`
@@ -51,12 +65,17 @@ type Subscription struct {
 type SubscriptionBindingItem struct {
 	ID                   string `json:"id"`
 	SubscriptionID       string `json:"subscription_id"`
+	SubscriptionPlanID   string `json:"subscription_plan_id"`
 	NodeInboundBindingID string `json:"node_inbound_binding_id"`
 	NodeID               string `json:"node_id"`
 	NodeName             string `json:"node_name"`
 	NodeAddress          string `json:"node_address"`
 	InboundProfileID     string `json:"inbound_profile_id"`
 	InboundName          string `json:"inbound_name"`
+	Protocol             string `json:"protocol"`
+	ListenPort           int    `json:"listen_port"`
+	Transport            string `json:"transport"`
+	TLSMode              string `json:"tls_mode"`
 	PublicHost           string `json:"public_host"`
 }
 
@@ -81,6 +100,7 @@ type InboundProfile struct {
 	TLSKeyPath             string            `json:"tls_key_path"`
 	ShadowsocksMethod      string            `json:"shadowsocks_method"`
 	Metadata               map[string]string `json:"metadata"`
+	Users                  []User            `json:"users,omitempty"`
 	CreatedAt              time.Time         `json:"created_at"`
 	ModifiedAt             time.Time         `json:"modified_at"`
 }
@@ -136,7 +156,7 @@ type AuditEvent struct {
 type Dashboard struct {
 	Nodes         []Node
 	Users         []User
-	Subscriptions []Subscription
+	Subscriptions []SubscriptionPlan
 	Inbounds      []InboundProfile
 	Bindings      []NodeInboundBinding
 	TopologyLinks []TopologyLink

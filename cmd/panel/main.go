@@ -26,8 +26,15 @@ func main() {
 		localNodeToken  = flag.String("local-node-token", "", "bootstrap token for the local node-agent container")
 		singboxBinary   = flag.String("singbox-binary", "sing-box", "path to sing-box binary")
 		localNodePoll   = flag.Duration("local-node-poll", 20*time.Second, "local node-agent poll interval")
+		adminUser       = flag.String("admin-user", "admin", "admin username for Basic Auth")
+		adminPassword   = flag.String("admin-password", "", "admin password for Basic Auth")
+		adminPassFile   = flag.String("admin-password-file", "", "path to admin password file for Basic Auth")
 	)
 	flag.Parse()
+	adminPass, err := loadAdminPassword(*adminPassword, *adminPassFile)
+	if err != nil {
+		log.Fatalf("load admin password: %v", err)
+	}
 
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 		log.Fatalf("mkdir data dir: %v", err)
@@ -57,6 +64,8 @@ func main() {
 		DataDir:       *dataDir,
 		SingboxBinary: *singboxBinary,
 		LocalPoll:     *localNodePoll,
+		AdminUser:     *adminUser,
+		AdminPassword: adminPass,
 	})
 	if err != nil {
 		log.Fatalf("build server: %v", err)
@@ -99,4 +108,18 @@ func writeLocalNodeBootstrapToken(dataDir, token string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "bootstrap-token"), []byte(strings.TrimSpace(token)+"\n"), 0o600)
+}
+
+func loadAdminPassword(value, filePath string) (string, error) {
+	if strings.TrimSpace(filePath) != "" {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", err
+		}
+		value = strings.TrimSpace(string(data))
+	}
+	if value == "" {
+		return "", os.ErrInvalid
+	}
+	return value, nil
 }

@@ -312,6 +312,7 @@ func (a *Agent) bootstrapCA(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	req.Header.Set("X-Panel-CA-Fingerprint", strings.TrimSpace(a.cfg.PanelFingerprint))
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("download ca: %w", err)
