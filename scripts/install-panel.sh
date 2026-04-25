@@ -81,20 +81,101 @@ prompt() {
     return
   fi
 
+  if [[ ! -r /dev/tty ]]; then
+    if [[ -n "$default_value" ]]; then
+      printf -v "$var_name" "%s" "$default_value"
+      return
+    fi
+    error "Невозможно спросить '$label': нет интерактивного TTY. Передайте значение через аргумент или переменную окружения."
+    exit 1
+  fi
+
   if [[ -n "$default_value" ]]; then
-    if read -r -p "$label [$default_value]: " answer </dev/tty 2>/dev/null; then
-      answer="${answer:-$default_value}"
-    else
-      answer="$default_value"
-    fi
+    printf "%s [%s]: " "$label" "$default_value" >/dev/tty
+    read -r answer </dev/tty || answer=""
+    answer="${answer:-$default_value}"
   else
-    if read -r -p "$label: " answer </dev/tty 2>/dev/null; then
-      :
-    else
-      answer=""
-    fi
+    printf "%s: " "$label" >/dev/tty
+    read -r answer </dev/tty || answer=""
   fi
   printf -v "$var_name" "%s" "$answer"
+}
+
+prompt_required() {
+  local var_name="$1"
+  local label="$2"
+  local default_value="${3:-}"
+  local value
+  while true; do
+    prompt "$var_name" "$label" "$default_value"
+    value="${!var_name:-}"
+    if [[ -n "$value" ]]; then
+      return
+    fi
+    error "$label не может быть пустым"
+    unset "$var_name"
+  done
+}
+
+prompt_choice() {
+  local var_name="$1"
+  local label="$2"
+  local default_value="$3"
+  shift 3
+  local value allowed
+  while true; do
+    prompt "$var_name" "$label" "$default_value"
+    value="${!var_name:-}"
+    for allowed in "$@"; do
+      if [[ "$value" == "$allowed" ]]; then
+        return
+      fi
+    done
+    error "Некорректное значение '$value'. Допустимо: $*"
+    if [[ "$NON_INTERACTIVE" == "true" ]]; then
+      exit 1
+    fi
+    unset "$var_name"
+  done
+}
+
+url_host() {
+  local value="${1#https://}"
+  value="${value%%/*}"
+  value="${value%%:*}"
+  printf "%s" "$value"
+}
+
+is_ip_address() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$1" =~ ^\[.*\]$ || "$1" == *:* ]]
+}
+
+is_local_host() {
+  [[ "$1" == "localhost" || "$1" == "127.0.0.1" || "$1" == "::1" ]]
+}
+
+is_valid_port() {
+  [[ "$1" =~ ^[0-9]+$ ]] && (( "$1" >= 1 && "$1" <= 65535 ))
+}
+
+validate_panel_base_url() {
+  require_https_url "$PANEL_BASE_URL"
+  local host
+  host="$(url_host "$PANEL_BASE_URL")"
+  if [[ -z "$host" ]]; then
+    error "Не удалось определить host из PANEL_BASE_URL=$PANEL_BASE_URL"
+    exit 1
+  fi
+}
+
+default_tls_mode() {
+  local host
+  host="$(url_host "$PANEL_BASE_URL")"
+  if [[ -n "$host" ]] && ! is_ip_address "$host" && ! is_local_host "$host"; then
+    printf "letsencrypt"
+  else
+    printf "internal"
+  fi
 }
 
 choose_existing_action() {
@@ -106,11 +187,9 @@ choose_existing_action() {
   local answer
   printf "Обнаружена существующая установка панели в %s\n" "$INSTALL_DIR"
   printf "Выберите действие: [u] обновить, [d] удалить, [c] отмена\n"
-  if read -r -p "Действие [u]: " answer </dev/tty 2>/dev/null; then
-    answer="${answer:-u}"
-  else
-    answer="u"
-  fi
+  printf "Действие [u]: " >/dev/tty
+  read -r answer </dev/tty || answer=""
+  answer="${answer:-u}"
 
   case "$answer" in
     u|U|update|обновить) EXISTING_ACTION="update" ;;
@@ -207,6 +286,11 @@ PANEL_BASE_URL="${PANEL_BASE_URL}"
 PANEL_STATE_DIR="${PANEL_STATE_DIR}"
 ADMIN_USER="${ADMIN_USER}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD}"
+TLS_MODE="${TLS_MODE}"
+TLS_CERT_FILE="${TLS_CERT_FILE}"
+TLS_KEY_FILE="${TLS_KEY_FILE}"
+LETSENCRYPT_DIR="${LETSENCRYPT_DIR}"
+TLS_EMAIL="${TLS_EMAIL}"
 ENABLE_LOCAL_NODE="${ENABLE_LOCAL_NODE}"
 LOCAL_NODE_TOKEN="${LOCAL_NODE_TOKEN}"
 LOCAL_NODE_STATE_DIR="${LOCAL_NODE_STATE_DIR}"
@@ -235,6 +319,34 @@ load_existing_admin_credentials() {
   done <"$ENV_FILE"
 }
 
+load_existing_env() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return
+  fi
+  local key value
+  while IFS='=' read -r key value; do
+    value="${value%\"}"
+    value="${value#\"}"
+    case "$key" in
+      ADMIN_USER) if [[ -z "$ADMIN_USER" ]]; then ADMIN_USER="$value"; fi ;;
+      ADMIN_PASSWORD) if [[ -z "$ADMIN_PASSWORD" ]]; then ADMIN_PASSWORD="$value"; fi ;;
+      PANEL_BASE_URL) if [[ -z "$PANEL_BASE_URL" ]]; then PANEL_BASE_URL="$value"; fi ;;
+      PANEL_PORT) if [[ -z "$PANEL_PORT" ]]; then PANEL_PORT="$value"; fi ;;
+      TLS_MODE) if [[ -z "$TLS_MODE" ]]; then TLS_MODE="$value"; fi ;;
+      TLS_CERT_FILE) if [[ -z "$TLS_CERT_FILE" ]]; then TLS_CERT_FILE="$value"; fi ;;
+      TLS_KEY_FILE) if [[ -z "$TLS_KEY_FILE" ]]; then TLS_KEY_FILE="$value"; fi ;;
+      LETSENCRYPT_DIR) if [[ -z "$LETSENCRYPT_DIR" ]]; then LETSENCRYPT_DIR="$value"; fi ;;
+      TLS_EMAIL) if [[ -z "$TLS_EMAIL" ]]; then TLS_EMAIL="$value"; fi ;;
+      ENABLE_LOCAL_NODE) if [[ -z "$ENABLE_LOCAL_NODE" ]]; then ENABLE_LOCAL_NODE="$value"; fi ;;
+      LOCAL_NODE_TOKEN) if [[ -z "$LOCAL_NODE_TOKEN" ]]; then LOCAL_NODE_TOKEN="$value"; fi ;;
+      LOCAL_NODE_STATE_DIR) if [[ -z "$LOCAL_NODE_STATE_DIR" ]]; then LOCAL_NODE_STATE_DIR="$value"; fi ;;
+      LOCAL_NODE_POLL_INTERVAL) if [[ -z "$LOCAL_NODE_POLL_INTERVAL" ]]; then LOCAL_NODE_POLL_INTERVAL="$value"; fi ;;
+      SINGBOX_IMAGE) if [[ -z "$SINGBOX_IMAGE" ]]; then SINGBOX_IMAGE="$value"; fi ;;
+      SINGBOX_BINARY_PATH) if [[ -z "$SINGBOX_BINARY_PATH" ]]; then SINGBOX_BINARY_PATH="$value"; fi ;;
+    esac
+  done <"$ENV_FILE"
+}
+
 # === DOCKER ===
 install_docker_if_missing() {
   if has_cmd docker && (docker compose version >/dev/null 2>&1 || has_cmd docker-compose); then
@@ -246,11 +358,9 @@ install_docker_if_missing() {
     answer="y"
   else
     printf "Docker Engine или Compose не найдены.\n"
-    if read -r -p "Установить Docker автоматически через официальный get.docker.com?[Y/n]: " answer </dev/tty 2>/dev/null; then
-      answer="${answer:-Y}"
-    else
-      answer="Y"
-    fi
+    printf "Установить Docker автоматически через официальный get.docker.com? [Y/n]: " >/dev/tty
+    read -r answer </dev/tty || answer=""
+    answer="${answer:-Y}"
   fi
 
   case "$answer" in
@@ -334,6 +444,81 @@ compose_run() {
   "${COMPOSE_CMD[@]}" "$@"
 }
 
+install_certbot_if_missing() {
+  if has_cmd certbot; then
+    return
+  fi
+  if ! has_cmd apt-get; then
+    error "Для автоматического Let's Encrypt нужен certbot. Установите certbot вручную или выберите TLS_MODE=internal."
+    exit 1
+  fi
+  info "Устанавливаю certbot"
+  run_privileged apt-get update
+  run_privileged apt-get install -y certbot
+}
+
+ensure_letsencrypt_certificate() {
+  if [[ "$TLS_MODE" != "letsencrypt" ]]; then
+    TLS_CERT_FILE=""
+    TLS_KEY_FILE=""
+    return
+  fi
+
+  local host host_cert_file host_key_file
+  local -a email_args
+  host="$(url_host "$PANEL_BASE_URL")"
+  if [[ -z "$host" || "$host" == *"/"* || "$host" == *"_"* || "$host" != *"."* ]] || is_ip_address "$host" || is_local_host "$host"; then
+    error "Let's Encrypt работает только с публичным доменом. Сейчас host: $host"
+    error "Используйте домен вида panel.example.com или выберите TLS_MODE=internal."
+    exit 1
+  fi
+
+  if [[ "$PANEL_BASE_URL" == *":8443"* ]]; then
+    warn "Сертификат будет доверенным, но браузер все равно откроет панель с портом :8443. Для обычного URL используйте --panel-port 443 и PANEL_BASE_URL без :8443."
+  fi
+
+  install_certbot_if_missing
+  LETSENCRYPT_DIR="${LETSENCRYPT_DIR:-/etc/letsencrypt}"
+  host_cert_file="$LETSENCRYPT_DIR/live/$host/fullchain.pem"
+  host_key_file="$LETSENCRYPT_DIR/live/$host/privkey.pem"
+  TLS_CERT_FILE="/etc/letsencrypt/live/$host/fullchain.pem"
+  TLS_KEY_FILE="/etc/letsencrypt/live/$host/privkey.pem"
+
+  if [[ -f "$host_cert_file" && -f "$host_key_file" ]]; then
+    info "Использую существующий Let's Encrypt сертификат для $host"
+  else
+    warn "Для выпуска Let's Encrypt сертификата домен $host должен указывать на этот VPS, а порт 80 должен быть открыт и свободен."
+    if [[ -n "$TLS_EMAIL" ]]; then
+      email_args=(--email "$TLS_EMAIL")
+    else
+      email_args=(--register-unsafely-without-email)
+    fi
+    mkdir -p "$INSTALL_DIR/certbot-work" "$INSTALL_DIR/certbot-logs"
+    run_privileged certbot certonly --standalone --non-interactive --agree-tos --config-dir "$LETSENCRYPT_DIR" --work-dir "$INSTALL_DIR/certbot-work" --logs-dir "$INSTALL_DIR/certbot-logs" "${email_args[@]}" -d "$host"
+  fi
+
+  if [[ ! -f "$host_cert_file" || ! -f "$host_key_file" ]]; then
+    error "Сертификат Let's Encrypt не найден после выпуска: $host_cert_file"
+    exit 1
+  fi
+  install_renew_hook
+}
+
+install_renew_hook() {
+  local hook_dir hook_file
+  hook_dir="${LETSENCRYPT_DIR:-/etc/letsencrypt}/renewal-hooks/deploy"
+  hook_file="$hook_dir/mgb-panel-restart.sh"
+  run_privileged mkdir -p "$hook_dir"
+  run_privileged tee "$hook_file" >/dev/null <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+if command -v docker >/dev/null 2>&1; then
+  docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart panel >/dev/null 2>&1 || true
+fi
+EOF
+  run_privileged chmod 0755 "$hook_file"
+}
+
 # === АРГУМЕНТЫ И MAIN ===
 usage() {
   cat <<'EOF'
@@ -349,6 +534,9 @@ usage() {
   --panel-port PORT            Порт панели (по умолч. 8443)
   --admin-user USER            Логин администратора (по умолч. admin)
   --admin-password PASSWORD    Пароль администратора
+  --tls-mode internal|letsencrypt
+  --tls-email EMAIL            Email для Let's Encrypt (необязательно)
+  --letsencrypt-dir PATH       Каталог Let's Encrypt на хосте
   --enable-local-node true/false
   --local-node-token TOKEN
   --local-node-state-dir PATH
@@ -362,16 +550,21 @@ REPO_URL="${REPO_URL:-https://github.com/Beykus-Y/mgb-panel}"
 REPO_REF="${REPO_REF:-main}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/mgb-panel}"
 PANEL_BASE_URL="${PANEL_BASE_URL:-}"
-PANEL_PORT="${PANEL_PORT:-8443}"
+PANEL_PORT="${PANEL_PORT:-}"
 ADMIN_USER="${ADMIN_USER:-}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 ADMIN_PASSWORD_WAS_GENERATED="false"
-ENABLE_LOCAL_NODE="${ENABLE_LOCAL_NODE:-false}"
+TLS_MODE="${TLS_MODE:-}"
+TLS_EMAIL="${TLS_EMAIL:-}"
+TLS_CERT_FILE="${TLS_CERT_FILE:-}"
+TLS_KEY_FILE="${TLS_KEY_FILE:-}"
+LETSENCRYPT_DIR="${LETSENCRYPT_DIR:-}"
+ENABLE_LOCAL_NODE="${ENABLE_LOCAL_NODE:-}"
 LOCAL_NODE_TOKEN="${LOCAL_NODE_TOKEN:-}"
 LOCAL_NODE_STATE_DIR="${LOCAL_NODE_STATE_DIR:-}"
-LOCAL_NODE_POLL_INTERVAL="${LOCAL_NODE_POLL_INTERVAL:-20s}"
-SINGBOX_IMAGE="${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
-SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
+LOCAL_NODE_POLL_INTERVAL="${LOCAL_NODE_POLL_INTERVAL:-}"
+SINGBOX_IMAGE="${SINGBOX_IMAGE:-}"
+SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-}"
 NON_INTERACTIVE="false"
 EXISTING_ACTION=""
 COMPOSE_CMD=()
@@ -389,6 +582,9 @@ while [[ $# -gt 0 ]]; do
     --panel-port) PANEL_PORT="$2"; shift 2 ;;
     --admin-user) ADMIN_USER="$2"; shift 2 ;;
     --admin-password) ADMIN_PASSWORD="$2"; shift 2 ;;
+    --tls-mode) TLS_MODE="$2"; shift 2 ;;
+    --tls-email) TLS_EMAIL="$2"; shift 2 ;;
+    --letsencrypt-dir) LETSENCRYPT_DIR="$2"; shift 2 ;;
     --enable-local-node) ENABLE_LOCAL_NODE="$2"; shift 2 ;;
     --local-node-token) LOCAL_NODE_TOKEN="$2"; shift 2 ;;
     --local-node-state-dir) LOCAL_NODE_STATE_DIR="$2"; shift 2 ;;
@@ -399,24 +595,55 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${LOCAL_REPO_DIR:-}" ]]; then
-  prompt REPO_URL "URL git репозитория с mgb-panel" "https://github.com/Beykus-Y/mgb-panel"
-fi
-prompt PANEL_BASE_URL "Публичный URL панели" "https://panel.example.com:$PANEL_PORT"
-require_https_url "$PANEL_BASE_URL"
-
 REPO_DIR="$INSTALL_DIR/repo"
 if [[ -n "${LOCAL_REPO_DIR:-}" ]]; then
   REPO_DIR="$LOCAL_REPO_DIR"
 fi
 PANEL_STATE_DIR="$INSTALL_DIR/state"
+ENV_FILE="$INSTALL_DIR/panel.env"
+COMPOSE_FILE="$REPO_DIR/deploy/panel/docker-compose.yml"
+load_existing_env
+
+if [[ -z "${LOCAL_REPO_DIR:-}" ]]; then
+  prompt_required REPO_URL "URL git репозитория с mgb-panel" "https://github.com/Beykus-Y/mgb-panel"
+fi
+prompt_required PANEL_PORT "Порт панели на VPS" "8443"
+if ! is_valid_port "$PANEL_PORT"; then
+  error "Некорректный порт панели: $PANEL_PORT"
+  exit 1
+fi
+if [[ "$NON_INTERACTIVE" == "true" && -z "$PANEL_BASE_URL" ]]; then
+  error "В non-interactive режиме обязательно передайте --panel-base-url"
+  exit 1
+fi
+prompt_required PANEL_BASE_URL "Публичный HTTPS URL панели" "https://panel.example.com:$PANEL_PORT"
+validate_panel_base_url
 if [[ -z "$LOCAL_NODE_STATE_DIR" ]]; then
   LOCAL_NODE_STATE_DIR="$INSTALL_DIR/local-node-state"
 fi
-ENV_FILE="$INSTALL_DIR/panel.env"
-COMPOSE_FILE="$REPO_DIR/deploy/panel/docker-compose.yml"
-load_existing_admin_credentials
-prompt ADMIN_USER "Логин администратора" "admin"
+if [[ -z "$LETSENCRYPT_DIR" ]]; then
+  LETSENCRYPT_DIR="/etc/letsencrypt"
+fi
+if [[ -z "$ENABLE_LOCAL_NODE" ]]; then
+  ENABLE_LOCAL_NODE="false"
+fi
+if [[ -z "$LOCAL_NODE_POLL_INTERVAL" ]]; then
+  LOCAL_NODE_POLL_INTERVAL="20s"
+fi
+if [[ -z "$SINGBOX_IMAGE" ]]; then
+  SINGBOX_IMAGE="ghcr.io/sagernet/sing-box:v1.13.11"
+fi
+if [[ -z "$SINGBOX_BINARY_PATH" ]]; then
+  SINGBOX_BINARY_PATH="/usr/local/bin/sing-box"
+fi
+if [[ -z "$TLS_MODE" ]]; then
+  TLS_MODE="$(default_tls_mode)"
+fi
+prompt_choice TLS_MODE "TLS сертификат панели: internal = встроенный CA, letsencrypt = доверенный браузером" "$TLS_MODE" internal letsencrypt
+if [[ "$TLS_MODE" == "letsencrypt" ]]; then
+  prompt TLS_EMAIL "Email для Let's Encrypt (можно оставить пустым)" "$TLS_EMAIL"
+fi
+prompt_required ADMIN_USER "Логин администратора" "admin"
 if [[ -z "$ADMIN_PASSWORD" ]]; then
   GENERATED_ADMIN_PASSWORD="$(generate_token)"
   if [[ "$NON_INTERACTIVE" == "true" ]]; then
@@ -461,6 +688,7 @@ if [[ "$ENABLE_LOCAL_NODE" == "true" && -z "$LOCAL_NODE_TOKEN" ]]; then
   info "Сгенерирован bootstrap token для локального node-agent контейнера"
 fi
 
+ensure_letsencrypt_certificate
 ensure_repo
 write_env
 
@@ -478,6 +706,10 @@ printf "\n"
 printf "Каталог установки: %s\n" "$INSTALL_DIR"
 printf "Файл окружения:    %s\n" "$ENV_FILE"
 printf "Логин админки:     %s\n" "$ADMIN_USER"
+printf "TLS режим:         %s\n" "$TLS_MODE"
+if [[ "$TLS_MODE" == "letsencrypt" ]]; then
+  printf "TLS сертификат:    %s\n" "$TLS_CERT_FILE"
+fi
 if [[ "$ADMIN_PASSWORD_WAS_GENERATED" == "true" ]]; then
   printf "Пароль админки:    %s\n" "$ADMIN_PASSWORD"
 fi

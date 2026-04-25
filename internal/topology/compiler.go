@@ -29,6 +29,8 @@ func CompileNodeConfig(node model.Node, inbounds []model.InboundProfile, links [
 	}
 
 	configInbounds := make([]map[string]any, 0, len(inbounds))
+	statsUsers := make([]string, 0)
+	statsInbounds := make([]string, 0, len(inbounds))
 	for _, inbound := range inbounds {
 		profile, err := inboundrules.Normalize(inbound)
 		if err != nil {
@@ -44,11 +46,13 @@ func CompileNodeConfig(node model.Node, inbounds []model.InboundProfile, links [
 
 		usersBlock := make([]map[string]any, 0, len(inboundUsers))
 		for _, user := range inboundUsers {
+			statsUser := TrafficUserTag(user.ID, profile.ID)
+			statsUsers = append(statsUsers, statsUser)
 			switch profile.Protocol {
 			case "vless":
-				usersBlock = append(usersBlock, map[string]any{"name": user.Name, "uuid": user.AccessKey, "flow": ""})
+				usersBlock = append(usersBlock, map[string]any{"name": statsUser, "uuid": user.AccessKey, "flow": ""})
 			case "trojan", "hysteria2":
-				usersBlock = append(usersBlock, map[string]any{"name": user.Name, "password": profile.Password})
+				usersBlock = append(usersBlock, map[string]any{"name": statsUser, "password": profile.Password})
 			}
 		}
 
@@ -72,6 +76,7 @@ func CompileNodeConfig(node model.Node, inbounds []model.InboundProfile, links [
 			item["tls"] = tlsBlock
 		}
 		configInbounds = append(configInbounds, item)
+		statsInbounds = append(statsInbounds, profile.ID)
 	}
 
 	for _, link := range links {
@@ -116,9 +121,33 @@ func CompileNodeConfig(node model.Node, inbounds []model.InboundProfile, links [
 				"enabled": true,
 				"path":    "cache.db",
 			},
+			"v2ray_api": map[string]any{
+				"listen": "127.0.0.1:10085",
+				"stats": map[string]any{
+					"enabled":  true,
+					"inbounds": statsInbounds,
+					"outbounds": []string{"direct", "block"},
+					"users":    statsUsers,
+				},
+			},
 		},
 	}
 	return marshalStable(payload)
+}
+
+func TrafficUserTag(userID, inboundID string) string {
+	if userID == "" {
+		userID = "unknown-user"
+	}
+	if inboundID == "" {
+		inboundID = "unknown-inbound"
+	}
+	return userID + "@" + inboundID
+}
+
+func ParseTrafficUserTag(tag string) (string, string, bool) {
+	userID, inboundID, ok := strings.Cut(tag, "@")
+	return userID, inboundID, ok && userID != "" && inboundID != ""
 }
 
 func splitCIDRs(raw string) []string {

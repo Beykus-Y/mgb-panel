@@ -52,20 +52,60 @@ prompt() {
     return
   fi
 
+  if [[ ! -r /dev/tty ]]; then
+    if [[ -n "$default_value" ]]; then
+      printf -v "$var_name" "%s" "$default_value"
+      return
+    fi
+    error "Невозможно спросить '$label': нет интерактивного TTY. Передайте значение через аргумент или переменную окружения."
+    exit 1
+  fi
+
   if [[ -n "$default_value" ]]; then
-    read -r -p "$label [$default_value]: " answer
+    printf "%s [%s]: " "$label" "$default_value" >/dev/tty
+    read -r answer </dev/tty || answer=""
     answer="${answer:-$default_value}"
   else
-    read -r -p "$label: " answer
+    printf "%s: " "$label" >/dev/tty
+    read -r answer </dev/tty || answer=""
   fi
   printf -v "$var_name" "%s" "$answer"
+}
+
+prompt_required() {
+  local var_name="$1"
+  local label="$2"
+  local default_value="${3:-}"
+  local value
+  while true; do
+    prompt "$var_name" "$label" "$default_value"
+    value="${!var_name:-}"
+    if [[ -n "$value" ]]; then
+      return
+    fi
+    error "$label не может быть пустым"
+    unset "$var_name"
+  done
+}
+
+is_sha256_hex() {
+  [[ "$1" =~ ^[A-Fa-f0-9]{64}$ ]]
+}
+
+is_safe_dir() {
+  local dir="$1"
+  case "$dir" in
+    /|/usr|/usr/local|/etc|/bin|/sbin|/var|/opt|/home|/root) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 choose_existing_action() {
   local answer
   printf "Обнаружена существующая установка ноды в %s\n" "$INSTALL_DIR"
   printf "Выберите действие: [u] обновить, [d] удалить, [c] отмена\n"
-  read -r -p "Действие [u]: " answer
+  printf "Действие [u]: " >/dev/tty
+  read -r answer </dev/tty || answer=""
   answer="${answer:-u}"
   case "$answer" in
     u|U|update|обновить) EXISTING_ACTION="update" ;;
@@ -124,7 +164,12 @@ delete_install() {
     rm -rf "$NODE_STATE_DIR" "$BOOTSTRAP_DIR" "$ENV_FILE"
     rmdir "$INSTALL_DIR" 2>/dev/null || true
   else
-    rm -rf "$INSTALL_DIR"
+    if is_safe_dir "$INSTALL_DIR"; then
+      rm -rf "$INSTALL_DIR"
+    else
+      error "Сработала защита: каталог $INSTALL_DIR системный и не может быть удален автоматически"
+      exit 1
+    fi
   fi
 
   success "Нода удалена"
@@ -132,15 +177,34 @@ delete_install() {
 
 write_env() {
   cat >"$ENV_FILE" <<EOF
-NODE_STATE_DIR=$NODE_STATE_DIR
-PANEL_URL=$PANEL_URL
-PANEL_CA_FILE=$PANEL_CA_FILE
-BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN
-PANEL_FINGERPRINT=$PANEL_FINGERPRINT
-POLL_INTERVAL=$POLL_INTERVAL
-SINGBOX_IMAGE=$SINGBOX_IMAGE
-SINGBOX_BINARY_PATH=$SINGBOX_BINARY_PATH
+NODE_STATE_DIR="${NODE_STATE_DIR}"
+PANEL_URL="${PANEL_URL}"
+PANEL_CA_FILE="${PANEL_CA_FILE}"
+BOOTSTRAP_TOKEN="${BOOTSTRAP_TOKEN}"
+PANEL_FINGERPRINT="${PANEL_FINGERPRINT}"
+POLL_INTERVAL="${POLL_INTERVAL}"
+SINGBOX_IMAGE="${SINGBOX_IMAGE}"
+SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH}"
 EOF
+}
+
+load_existing_env() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return
+  fi
+  local key value
+  while IFS='=' read -r key value; do
+    value="${value%\"}"
+    value="${value#\"}"
+    case "$key" in
+      PANEL_URL) if [[ -z "$PANEL_URL" ]]; then PANEL_URL="$value"; fi ;;
+      BOOTSTRAP_TOKEN) if [[ -z "$BOOTSTRAP_TOKEN" ]]; then BOOTSTRAP_TOKEN="$value"; fi ;;
+      PANEL_FINGERPRINT) if [[ -z "$PANEL_FINGERPRINT" ]]; then PANEL_FINGERPRINT="$value"; fi ;;
+      POLL_INTERVAL) if [[ -z "$POLL_INTERVAL" ]]; then POLL_INTERVAL="$value"; fi ;;
+      SINGBOX_IMAGE) if [[ -z "$SINGBOX_IMAGE" ]]; then SINGBOX_IMAGE="$value"; fi ;;
+      SINGBOX_BINARY_PATH) if [[ -z "$SINGBOX_BINARY_PATH" ]]; then SINGBOX_BINARY_PATH="$value"; fi ;;
+    esac
+  done <"$ENV_FILE"
 }
 
 install_docker_if_missing() {
@@ -150,7 +214,8 @@ install_docker_if_missing() {
 
   local answer
   printf "Docker Engine или Compose не найдены.\n"
-  read -r -p "Установить Docker автоматически через официальный get.docker.com? [Y/n]: " answer
+  printf "Установить Docker автоматически через официальный get.docker.com? [Y/n]: " >/dev/tty
+  read -r answer </dev/tty || answer=""
   answer="${answer:-Y}"
   case "$answer" in
     n|N|no|нет)
@@ -283,9 +348,9 @@ PANEL_CA_URL="${PANEL_CA_URL:-}"
 PANEL_CA_INLINE="${PANEL_CA_INLINE:-}"
 PANEL_FINGERPRINT="${PANEL_FINGERPRINT:-}"
 BOOTSTRAP_TOKEN="${BOOTSTRAP_TOKEN:-}"
-POLL_INTERVAL="${POLL_INTERVAL:-20s}"
-SINGBOX_IMAGE="${SINGBOX_IMAGE:-ghcr.io/sagernet/sing-box:v1.13.11}"
-SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-/usr/local/bin/sing-box}"
+POLL_INTERVAL="${POLL_INTERVAL:-}"
+SINGBOX_IMAGE="${SINGBOX_IMAGE:-}"
+SINGBOX_BINARY_PATH="${SINGBOX_BINARY_PATH:-}"
 CA_MODE="${CA_MODE:-auto}"
 EXISTING_ACTION=""
 COMPOSE_CMD=()
@@ -315,23 +380,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${LOCAL_REPO_DIR:-}" ]]; then
-  prompt REPO_URL "URL git репозитория с mgb-panel" "https://github.com/Beykus-Y/mgb-panel"
-fi
-prompt PANEL_URL "URL панели" "https://panel.example.com:8443"
-require_https_url "$PANEL_URL"
-prompt BOOTSTRAP_TOKEN "Bootstrap token ноды"
-
-if [[ "$CA_MODE" == "manual" ]]; then
-  prompt PANEL_CA_INLINE "Вставь PEM сертификат панели. Поддерживаются реальные переводы строк и последовательности \\n"
-else
-  prompt PANEL_FINGERPRINT "SHA-256 fingerprint CA панели"
-fi
-
-if [[ -z "$PANEL_CA_URL" ]]; then
-  PANEL_CA_URL="${PANEL_URL%/}/api/pki/ca"
-fi
-
 REPO_DIR="$INSTALL_DIR/repo"
 if [[ -n "${LOCAL_REPO_DIR:-}" ]]; then
   REPO_DIR="$LOCAL_REPO_DIR"
@@ -341,6 +389,41 @@ BOOTSTRAP_DIR="$INSTALL_DIR/bootstrap"
 PANEL_CA_FILE="$BOOTSTRAP_DIR/panel-ca.pem"
 ENV_FILE="$INSTALL_DIR/node.env"
 COMPOSE_FILE="$REPO_DIR/deploy/node/docker-compose.yml"
+load_existing_env
+
+if [[ -z "${LOCAL_REPO_DIR:-}" ]]; then
+  prompt_required REPO_URL "URL git репозитория с mgb-panel" "https://github.com/Beykus-Y/mgb-panel"
+fi
+case "$CA_MODE" in
+  auto|manual) ;;
+  *) error "--ca-mode должен быть auto или manual"; exit 1 ;;
+esac
+prompt_required PANEL_URL "URL панели" "https://panel.example.com:8443"
+require_https_url "$PANEL_URL"
+prompt_required BOOTSTRAP_TOKEN "Bootstrap token ноды"
+
+if [[ "$CA_MODE" == "manual" ]]; then
+  prompt_required PANEL_CA_INLINE "Вставь PEM сертификат панели. Поддерживаются реальные переводы строк и последовательности \\n"
+else
+  prompt_required PANEL_FINGERPRINT "SHA-256 fingerprint CA панели"
+  if ! is_sha256_hex "$PANEL_FINGERPRINT"; then
+    error "Fingerprint CA должен быть SHA-256 hex строкой из 64 символов"
+    exit 1
+  fi
+fi
+
+if [[ -z "$PANEL_CA_URL" ]]; then
+  PANEL_CA_URL="${PANEL_URL%/}/api/pki/ca"
+fi
+if [[ -z "$POLL_INTERVAL" ]]; then
+  POLL_INTERVAL="20s"
+fi
+if [[ -z "$SINGBOX_IMAGE" ]]; then
+  SINGBOX_IMAGE="ghcr.io/sagernet/sing-box:v1.13.11"
+fi
+if [[ -z "$SINGBOX_BINARY_PATH" ]]; then
+  SINGBOX_BINARY_PATH="/usr/local/bin/sing-box"
+fi
 
 if ! has_cmd git; then
   error "Команда 'git' не найдена"

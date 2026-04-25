@@ -156,6 +156,15 @@ func (a *Authority) TLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
+func (a *Authority) UseServerCertificate(certFile, keyFile string) error {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return fmt.Errorf("load external tls keypair: %w", err)
+	}
+	a.panelCert = cert
+	return nil
+}
+
 func (a *Authority) CAPEM() []byte {
 	return append([]byte(nil), a.caPEM...)
 }

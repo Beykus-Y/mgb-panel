@@ -16,6 +16,7 @@ FROM ${SINGBOX_IMAGE}
 ARG SINGBOX_BINARY_PATH
 WORKDIR /var/lib/mgb-node
 COPY --from=builder /out/node-agent /usr/local/bin/node-agent
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN set -eux; \
     chmod 0755 /usr/local/bin/node-agent; \
     if [ "${SINGBOX_BINARY_PATH}" != "/usr/local/bin/sing-box" ]; then \

@@ -79,6 +79,7 @@ sudo ./install-panel.sh
 - Публичный HTTPS URL панели, например `https://panel.example.com:8443` или `https://1.2.3.4:8443`.
 - Порт панели, по умолчанию `8443`.
 - Логин и пароль администратора. Если пароль не указан, установщик сгенерирует его и сохранит в `/opt/mgb-panel/panel.env`.
+- Режим TLS: `letsencrypt` для доверенного браузером сертификата на домене или `internal` для внутреннего CA/self-signed.
 - Нужно ли включать локальную ноду в том же compose-профиле.
 
 После установки:
@@ -91,7 +92,9 @@ sudo docker compose --env-file /opt/mgb-panel/panel.env -f docker-compose.yml lo
 
 Откройте панель по URL, который указали в `PANEL_BASE_URL`.
 
-Важно: панель использует собственный CA и self-signed TLS-сертификат. Браузер может показывать предупреждение о сертификате. Для нод это нормально: они проверяют CA по fingerprint или CA-файлу.
+Если `PANEL_BASE_URL` содержит публичный домен, установщик по умолчанию предложит `letsencrypt` и выпустит доверенный браузером сертификат через `certbot`. Для IP-адреса, `localhost` или закрытой сети используется `internal`, и браузер будет показывать предупреждение о сертификате.
+
+Для Let's Encrypt домен должен указывать на VPS, а порт `80/tcp` должен быть открыт на время выпуска и продления сертификата.
 
 ## Настройка firewall для панели
 
@@ -163,10 +166,12 @@ sudo ./scripts/install-panel.sh \
   --repo-url https://github.com/Beykus-Y/mgb-panel \
   --repo-ref main \
   --install-dir /opt/mgb-panel \
-  --panel-base-url https://panel.example.com:8443 \
-  --panel-port 8443 \
+  --panel-base-url https://panel.example.com \
+  --panel-port 443 \
   --admin-user admin \
-  --admin-password CHANGE_ME_STRONG_PASSWORD
+  --admin-password CHANGE_ME_STRONG_PASSWORD \
+  --tls-mode letsencrypt \
+  --tls-email admin@example.com
 ```
 
 Для локальной ноды в compose панели:
@@ -196,6 +201,10 @@ PANEL_BASE_URL=https://panel.example.com:8443
 PANEL_STATE_DIR=./state/panel
 ADMIN_USER=admin
 ADMIN_PASSWORD=change-me-strong-password
+TLS_MODE=letsencrypt
+TLS_CERT_FILE=/etc/letsencrypt/live/panel.example.com/fullchain.pem
+TLS_KEY_FILE=/etc/letsencrypt/live/panel.example.com/privkey.pem
+LETSENCRYPT_DIR=/etc/letsencrypt
 ENABLE_LOCAL_NODE=false
 LOCAL_NODE_TOKEN=
 LOCAL_NODE_STATE_DIR=./state/local-node
@@ -349,6 +358,7 @@ Admin JSON API:
 - `GET|POST /api/admin/bindings`
 - `GET|POST /api/admin/topology`
 - `GET /api/admin/revisions`
+- `GET /api/admin/traffic`
 
 Все `/api/admin/*` endpoints требуют admin Basic Auth.
 
@@ -379,8 +389,9 @@ Install scripts:
 ## Возможные проблемы при деплое
 
 - Basic Auth защищает админку, но при публичном доступе все равно лучше добавить firewall, VPN или reverse proxy с дополнительной защитой.
-- TLS-сертификат панели выдан внутренним CA. Браузер и `curl` не будут доверять ему без явного CA или `-k`.
-- Если `PANEL_BASE_URL` указан с неправильным hostname/IP, TLS-сертификат панели может не совпасть с URL, и ноды не смогут подключиться.
+- В режиме `internal` TLS-сертификат панели выдан внутренним CA. Браузер и `curl` не будут доверять ему без явного CA или `-k`.
+- В режиме `letsencrypt` нужен публичный домен, корректная DNS A/AAAA запись на VPS и открытый `80/tcp` для выпуска/продления сертификата.
+- Если `PANEL_BASE_URL` указан с неправильным hostname/IP, TLS-сертификат панели может не совпасть с URL, и браузер/ноды не смогут подключиться.
 - Ноды требуют доступ к панели по `PANEL_URL`; DNS, firewall и security groups должны пропускать исходящий HTTPS с ноды и входящий порт панели.
 - Inbound-порты `sing-box` на нодах должны быть открыты в firewall VPS.
 - `node-agent` работает с host network и `NET_ADMIN`; это нормально для сетевого агента, но повышает требования к доверию контейнеру.

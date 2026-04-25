@@ -152,10 +152,15 @@ func (a *Agent) sendHeartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	traffic, err := collectTraffic(ctx, a.state.NodeID)
+	if err != nil {
+		a.logger.Printf("traffic collection skipped: %v", err)
+	}
 	body, _ := json.Marshal(map[string]any{
 		"status":   defaultStatus(a.state.Status),
 		"revision": a.state.CurrentRev,
 		"error":    a.state.LastApplyError,
+		"traffic":  traffic,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.PanelURL+"/api/node/heartbeat", bytes.NewReader(body))
 	if err != nil {
@@ -366,9 +371,9 @@ func (a *Agent) bootstrapClient() (*http.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read ca bundle: %w", err)
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("append ca bundle")
+	pool, err := systemCertPoolWithPanelCA(caBytes)
+	if err != nil {
+		return nil, err
 	}
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -388,9 +393,9 @@ func (a *Agent) mTLSClient() (*http.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read ca bundle: %w", err)
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("append ca bundle")
+	pool, err := systemCertPoolWithPanelCA(caBytes)
+	if err != nil {
+		return nil, err
 	}
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -400,6 +405,17 @@ func (a *Agent) mTLSClient() (*http.Client, error) {
 		},
 	}
 	return &http.Client{Transport: tr, Timeout: 20 * time.Second}, nil
+}
+
+func systemCertPoolWithPanelCA(caBytes []byte) (*x509.CertPool, error) {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(caBytes) {
+		return nil, fmt.Errorf("append panel ca bundle")
+	}
+	return pool, nil
 }
 
 func (a *Agent) loadState() error {

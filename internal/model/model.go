@@ -153,6 +153,19 @@ type AuditEvent struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+type TrafficAggregate struct {
+	NodeID     string    `json:"node_id"`
+	UserID     string    `json:"user_id,omitempty"`
+	InboundID  string    `json:"inbound_id,omitempty"`
+	Uplink     int64     `json:"uplink"`
+	Downlink   int64     `json:"downlink"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+func (t TrafficAggregate) Total() int64 {
+	return t.Uplink + t.Downlink
+}
+
 type Dashboard struct {
 	Nodes         []Node
 	Users         []User
@@ -161,4 +174,5 @@ type Dashboard struct {
 	Bindings      []NodeInboundBinding
 	TopologyLinks []TopologyLink
 	Revisions     []ConfigRevision
+	Traffic       []TrafficAggregate
 }

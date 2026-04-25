@@ -7,17 +7,19 @@ services:
     restart: unless-stopped
     ports:
       - "${PANEL_PORT:-8443}:8443"
-    volumes:
-      - "${PANEL_STATE_DIR:-./state/panel}:/var/lib/mgb-panel"
     command:
       - "-listen=:8443"
       - "-base-url=${PANEL_BASE_URL:-https://localhost:8443}"
       - "-data-dir=/var/lib/mgb-panel"
       - "-admin-user=${ADMIN_USER:-admin}"
       - "-admin-password=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
+      - "-tls-cert-file=${TLS_CERT_FILE:-}"
+      - "-tls-key-file=${TLS_KEY_FILE:-}"
       - "-enable-local-node=${ENABLE_LOCAL_NODE:-false}"
       - "-local-node-token=${LOCAL_NODE_TOKEN:-}"
-
+    volumes:
+      - "${PANEL_STATE_DIR:-./state/panel}:/var/lib/mgb-panel"
+      - "${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro"
   local-node:
     build:
       context: ../..

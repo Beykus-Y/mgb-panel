@@ -674,6 +674,7 @@
         <a class="nav-link {{ if eq .Page "users" }}active{{ end }}" href="/users"><span>Пользователи</span><span class="nav-counter">{{ len .Dashboard.Users }}</span></a>
         <a class="nav-link {{ if eq .Page "subscriptions" }}active{{ end }}" href="/subscriptions"><span>Подписки</span><span class="nav-counter">{{ len .Dashboard.Subscriptions }}</span></a>
         <a class="nav-link {{ if eq .Page "bindings" }}active{{ end }}" href="/bindings"><span>Привязки</span><span class="nav-counter">{{ len .Dashboard.Bindings }}</span></a>
+        <a class="nav-link {{ if eq .Page "traffic" }}active{{ end }}" href="/traffic"><span>Трафик</span><span class="nav-counter">{{ len .Dashboard.Traffic }}</span></a>
         <a class="nav-link {{ if eq .Page "topology" }}active{{ end }}" href="/topology"><span>Топология</span><span class="nav-counter">{{ len .Dashboard.TopologyLinks }}</span></a>
         <a class="nav-link {{ if eq .Page "revisions" }}active{{ end }}" href="/revisions"><span>Ревизии</span><span class="nav-counter">{{ len .Dashboard.Revisions }}</span></a>
       </nav>
@@ -707,6 +708,7 @@
         <div class="metric"><strong>{{ len .Dashboard.Users }}</strong><span>Пользователей</span></div>
         <div class="metric"><strong>{{ len .Dashboard.Subscriptions }}</strong><span>Наборов</span></div>
         <div class="metric"><strong>{{ len .Dashboard.Bindings }}</strong><span>Привязок</span></div>
+        <div class="metric"><strong>{{ len .Dashboard.Traffic }}</strong><span>Счетчиков трафика</span></div>
         <div class="metric"><strong>{{ len .Dashboard.Revisions }}</strong><span>Ревизий</span></div>
       </section>
 
@@ -1394,6 +1396,53 @@
             <button type="submit">Привязать inbound</button>
           </form>
         </article>
+      </section>
+      {{ end }}
+
+      {{ if eq .Page "traffic" }}
+      <section class="card stack">
+        <div class="section-title">
+          <h2>Учет трафика</h2>
+          <span class="tag">{{ len .Dashboard.Traffic }} счетчиков</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <tr><th>Разрез</th><th>Узел</th><th>Пользователь</th><th>Inbound</th><th>Вверх</th><th>Вниз</th><th>Всего</th><th>Обновлено</th></tr>
+            {{ range .Dashboard.Traffic }}
+            <tr>
+              <td>
+                {{ if and .UserID .InboundID }}<span class="tag">Клиент × inbound</span>{{ else if .UserID }}<span class="tag">Клиент</span>{{ else if .InboundID }}<span class="tag">Inbound</span>{{ else }}<span class="tag">Узел</span>{{ end }}
+              </td>
+              <td>
+                <div>{{ index $.NodeNames .NodeID }}</div>
+                <div class="mono">{{ .NodeID }}</div>
+              </td>
+              <td>
+                {{ if .UserID }}
+                <div>{{ index $.UserNames .UserID }}</div>
+                <div class="mono">{{ .UserID }}</div>
+                {{ else }}<span class="small">Все пользователи</span>{{ end }}
+              </td>
+              <td>
+                {{ if .InboundID }}
+                <div>{{ index $.InboundNames .InboundID }}</div>
+                <div class="mono">{{ .InboundID }}</div>
+                {{ else }}<span class="small">Все inbound-ы</span>{{ end }}
+              </td>
+              <td>{{ formatBytes .Uplink }}</td>
+              <td>{{ formatBytes .Downlink }}</td>
+              <td><strong>{{ formatBytes .Total }}</strong></td>
+              <td>{{ formatDateTime .UpdatedAt }}</td>
+            </tr>
+            {{ else }}
+            <tr><td colspan="8">Трафик появится после heartbeat от ноды с активным sing-box stats API.</td></tr>
+            {{ end }}
+          </table>
+        </div>
+        <div class="api-box">
+          <div class="small">API</div>
+          <div class="mono" style="margin-top:10px;">GET /api/admin/traffic</div>
+        </div>
       </section>
       {{ end }}
 

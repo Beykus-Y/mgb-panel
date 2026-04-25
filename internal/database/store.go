@@ -286,6 +286,15 @@ func (s *Store) migrate(ctx context.Context) error {
 			details TEXT NOT NULL,
 			created_at TIMESTAMP NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS traffic_aggregates (
+			node_id TEXT NOT NULL,
+			user_id TEXT NOT NULL DEFAULT '',
+			inbound_id TEXT NOT NULL DEFAULT '',
+			uplink INTEGER NOT NULL DEFAULT 0,
+			downlink INTEGER NOT NULL DEFAULT 0,
+			updated_at TIMESTAMP NOT NULL,
+			PRIMARY KEY(node_id, user_id, inbound_id)
+		)`,
 	}
 
 	for _, stmt := range schema {
@@ -654,6 +663,59 @@ func (s *Store) MarkConfigApplied(ctx context.Context, nodeID string, revision i
 		return err
 	}
 	return s.UpdateNodeStatus(ctx, nodeID, status, lastError, node.LastSeenIP, revision)
+}
+
+func (s *Store) AddTraffic(ctx context.Context, items []model.TrafficAggregate) error {
+	if len(items) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin traffic tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now().UTC()
+	for _, item := range items {
+		if item.NodeID == "" || (item.Uplink == 0 && item.Downlink == 0) {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO traffic_aggregates(node_id, user_id, inbound_id, uplink, downlink, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?)
+			ON CONFLICT(node_id, user_id, inbound_id) DO UPDATE SET
+				uplink = uplink + excluded.uplink,
+				downlink = downlink + excluded.downlink,
+				updated_at = excluded.updated_at`,
+			item.NodeID,
+			item.UserID,
+			item.InboundID,
+			item.Uplink,
+			item.Downlink,
+			now,
+		); err != nil {
+			return fmt.Errorf("upsert traffic aggregate: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ListTraffic(ctx context.Context) ([]model.TrafficAggregate, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT node_id, user_id, inbound_id, uplink, downlink, updated_at FROM traffic_aggregates ORDER BY updated_at DESC, uplink + downlink DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list traffic: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.TrafficAggregate
+	for rows.Next() {
+		var item model.TrafficAggregate
+		if err := rows.Scan(&item.NodeID, &item.UserID, &item.InboundID, &item.Uplink, &item.Downlink, &item.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan traffic aggregate: %w", err)
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) EnsureConfigRevision(ctx context.Context, nodeID, configJSON string) (model.ConfigRevision, error) {
@@ -1718,6 +1780,10 @@ func (s *Store) Dashboard(ctx context.Context) (model.Dashboard, error) {
 	if err != nil {
 		return model.Dashboard{}, err
 	}
+	traffic, err := s.ListTraffic(ctx)
+	if err != nil {
+		return model.Dashboard{}, err
+	}
 	return model.Dashboard{
 		Nodes:         nodes,
 		Users:         users,
@@ -1726,6 +1792,7 @@ func (s *Store) Dashboard(ctx context.Context) (model.Dashboard, error) {
 		Bindings:      bindings,
 		TopologyLinks: links,
 		Revisions:     revisions,
+		Traffic:       traffic,
 	}, nil
 }
 

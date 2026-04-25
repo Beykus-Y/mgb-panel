@@ -29,6 +29,8 @@ func main() {
 		adminUser       = flag.String("admin-user", "admin", "admin username for Basic Auth")
 		adminPassword   = flag.String("admin-password", "", "admin password for Basic Auth")
 		adminPassFile   = flag.String("admin-password-file", "", "path to admin password file for Basic Auth")
+		tlsCertFile     = flag.String("tls-cert-file", "", "optional trusted HTTPS certificate chain file")
+		tlsKeyFile      = flag.String("tls-key-file", "", "optional trusted HTTPS private key file")
 	)
 	flag.Parse()
 	adminPass, err := loadAdminPassword(*adminPassword, *adminPassFile)
@@ -56,6 +58,15 @@ func main() {
 	authority, err := pki.LoadOrCreate(filepath.Join(*dataDir, "pki"), panelHost)
 	if err != nil {
 		log.Fatalf("load pki: %v", err)
+	}
+	if strings.TrimSpace(*tlsCertFile) != "" || strings.TrimSpace(*tlsKeyFile) != "" {
+		if strings.TrimSpace(*tlsCertFile) == "" || strings.TrimSpace(*tlsKeyFile) == "" {
+			log.Fatal("both -tls-cert-file and -tls-key-file are required when external TLS is used")
+		}
+		if err := authority.UseServerCertificate(*tlsCertFile, *tlsKeyFile); err != nil {
+			log.Fatalf("load external tls certificate: %v", err)
+		}
+		log.Printf("using external TLS certificate %s", *tlsCertFile)
 	}
 
 	server, err := controlplane.New(store, authority, controlplane.Config{

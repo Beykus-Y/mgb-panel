@@ -90,6 +90,7 @@ func New(store *database.Store, authority *pki.Authority, cfg Config) (*Server, 
 		"formatDate":              formatDate,
 		"formatDateTime":          formatDateTime,
 		"formatDateTimeInput":     formatDateTimeInput,
+		"formatBytes":             formatBytes,
 		"hasSubscriptionBinding":  hasSubscriptionBinding,
 		"hasUserSubscriptionPlan": hasUserSubscriptionPlan,
 		"nodeInstallCommand":      nodeInstallCommand,
@@ -122,6 +123,7 @@ func New(store *database.Store, authority *pki.Authority, cfg Config) (*Server, 
 	mux.HandleFunc("/subscriptions", srv.requireAdminAuth(srv.handleAdminPage("subscriptions")))
 	mux.HandleFunc("/inbounds", srv.requireAdminAuth(srv.handleAdminPage("inbounds")))
 	mux.HandleFunc("/bindings", srv.requireAdminAuth(srv.handleAdminPage("bindings")))
+	mux.HandleFunc("/traffic", srv.requireAdminAuth(srv.handleAdminPage("traffic")))
 	mux.HandleFunc("/topology", srv.requireAdminAuth(srv.handleAdminPage("topology")))
 	mux.HandleFunc("/revisions", srv.requireAdminAuth(srv.handleAdminPage("revisions")))
 	mux.HandleFunc("/install/node.sh", srv.handleInstallScript("assets/install-node.sh"))
@@ -147,6 +149,7 @@ func New(store *database.Store, authority *pki.Authority, cfg Config) (*Server, 
 	mux.HandleFunc("/api/admin/bindings", srv.requireAdminAuth(srv.handleAdminBindingsAPI))
 	mux.HandleFunc("/api/admin/topology", srv.requireAdminAuth(srv.handleAdminTopologyAPI))
 	mux.HandleFunc("/api/admin/revisions", srv.requireAdminAuth(srv.handleAdminRevisionsAPI))
+	mux.HandleFunc("/api/admin/traffic", srv.requireAdminAuth(srv.handleAdminTrafficAPI))
 
 	mux.HandleFunc("/api/pki/ca", srv.requireCAAccess(srv.handleCAPEM))
 	mux.HandleFunc("/api/node/enroll", srv.handleNodeEnroll)
@@ -649,6 +652,11 @@ func (s *Server) handleAdminRevisionsAPI(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, revisions, err)
 }
 
+func (s *Server) handleAdminTrafficAPI(w http.ResponseWriter, r *http.Request) {
+	traffic, err := s.store.ListTraffic(r.Context())
+	writeJSON(w, traffic, err)
+}
+
 func (s *Server) handleCAPEM(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -697,9 +705,10 @@ func (s *Server) handleNodeEnroll(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nodeID string) {
 	var req struct {
-		Status   string `json:"status"`
-		Revision int    `json:"revision"`
-		Error    string `json:"error"`
+		Status   string                   `json:"status"`
+		Revision int                      `json:"revision"`
+		Error    string                   `json:"error"`
+		Traffic  []model.TrafficAggregate `json:"traffic"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -708,7 +717,13 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	if req.Status == "" {
 		req.Status = "healthy"
 	}
-	err := s.store.UpdateNodeStatus(r.Context(), nodeID, req.Status, req.Error, remoteIP(r.RemoteAddr), req.Revision)
+	for i := range req.Traffic {
+		req.Traffic[i].NodeID = nodeID
+	}
+	err := s.store.AddTraffic(r.Context(), req.Traffic)
+	if err == nil {
+		err = s.store.UpdateNodeStatus(r.Context(), nodeID, req.Status, req.Error, remoteIP(r.RemoteAddr), req.Revision)
+	}
 	writeJSON(w, map[string]any{"ok": err == nil}, err)
 }
 
@@ -1047,7 +1062,7 @@ func (s *Server) handleInstallScript(assetPath string) http.HandlerFunc {
 
 func adminRedirect(r *http.Request, fallback string) string {
 	switch defaultForm(r, "redirect_to", fallback) {
-	case "/", "/overview", "/nodes", "/users", "/subscriptions", "/inbounds", "/bindings", "/topology", "/revisions":
+	case "/", "/overview", "/nodes", "/users", "/subscriptions", "/inbounds", "/bindings", "/traffic", "/topology", "/revisions":
 		return defaultForm(r, "redirect_to", fallback)
 	default:
 		return fallback
@@ -1110,6 +1125,8 @@ func pageTitle(page string) string {
 		return "Инбаунды"
 	case "bindings":
 		return "Привязки"
+	case "traffic":
+		return "Трафик"
 	case "topology":
 		return "Топология"
 	case "revisions":
@@ -1133,6 +1150,8 @@ func pageDescription(page string) string {
 		return "Профили входящих подключений с выбором транспорта и режима TLS/REALITY."
 	case "bindings":
 		return "Связки между узлами и inbound-профилями, которые публикуются в конфиг."
+	case "traffic":
+		return "Накопительный учет трафика по узлам, пользователям, inbound-ам и связкам пользователь-inbound."
 	case "topology":
 		return "Связи между узлами и транспорт для межузловой топологии."
 	case "revisions":
@@ -1255,6 +1274,23 @@ func formatDateTimeInput(t time.Time) string {
 		return ""
 	}
 	return t.In(time.Local).Format("2006-01-02T15:04")
+}
+
+func formatBytes(value int64) string {
+	if value < 0 {
+		value = 0
+	}
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB"}
+	amount := float64(value)
+	unit := 0
+	for amount >= 1024 && unit < len(units)-1 {
+		amount /= 1024
+		unit++
+	}
+	if unit == 0 {
+		return fmt.Sprintf("%d %s", value, units[unit])
+	}
+	return fmt.Sprintf("%.2f %s", amount, units[unit])
 }
 
 func hasSubscriptionBinding(plan model.SubscriptionPlan, bindingID string) bool {
