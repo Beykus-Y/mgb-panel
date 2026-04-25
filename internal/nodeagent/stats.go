@@ -38,7 +38,7 @@ func (v2rayStatsCodec) Unmarshal(data []byte, v any) error {
 
 type queryStatsRequest struct {
 	Pattern string `protobuf:"bytes,1,opt,name=pattern,proto3" json:"pattern,omitempty"`
-	Reset   bool   `protobuf:"varint,2,opt,name=reset,proto3" json:"reset,omitempty"`
+	Reset_  bool   `protobuf:"varint,2,opt,name=reset,proto3" json:"reset,omitempty"`
 }
 
 func (*queryStatsRequest) Reset()         {}
@@ -80,7 +80,7 @@ func collectTraffic(ctx context.Context, nodeID string) ([]model.TrafficAggregat
 	defer conn.Close()
 
 	var resp queryStatsResponse
-	if err := conn.Invoke(ctx, "/v2ray.core.app.stats.command.StatsService/QueryStats", &queryStatsRequest{Pattern: "", Reset: true}, &resp); err != nil {
+	if err := conn.Invoke(ctx, "/v2ray.core.app.stats.command.StatsService/QueryStats", &queryStatsRequest{Pattern: "", Reset_: true}, &resp); err != nil {
 		return nil, fmt.Errorf("query sing-box stats: %w", err)
 	}
 	return trafficFromStats(nodeID, resp.Stat), nil
